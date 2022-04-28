@@ -34,7 +34,7 @@ doc.subscribe(function (err) {
 
 function initialiseQuill(doc) {
     var quill = new Quill('#editor', {
-        theme: 'bubble',
+        theme: 'snow',
         modules: { cursors: true }
     });
 
