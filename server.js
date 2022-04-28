@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 
 shareDB.types.register(richText.type)
 
-const backend = new shareDB()
+const backend = new shareDB({ presence: true, doNotForwardSendPresenceErrorsToClient: true })
 
 const app = express()
 app.set('view engine', 'ejs')

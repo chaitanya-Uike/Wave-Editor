@@ -1,0 +1,44 @@
+body {
+  font-family: sans-serif;
+}
+
+input,
+button {
+  font-size: 16px;
+  margin-right: 10px;
+}
+
+.controls {
+  width: 100%;
+  text-align: center;
+  margin: 20px;
+}
+
+.ql-container {
+  padding: 10px;
+}
+
+.ql-editor {
+  border: 1px solid grey;
+}
+
+/* Keep the example simple by hiding the toolbar */
+.ql-tooltip {
+  display: none;
+}
+
+.ql-cursor-caret {
+  animation: pulse 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    height: 0%;
+    top: 50%;
+  }
+
+  to {
+    height: 100%;
+    top: 0%;
+  }
+}

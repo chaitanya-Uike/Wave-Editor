@@ -11,10 +11,16 @@
         const ROOM_ID = "<%=roomId%>"
     </script>
 
-    <link href="quill.snow.css" rel="stylesheet">
+    <link href="quill.bubble.css" rel="stylesheet">
+    <link href="style.css" rel="stylesheet">
 </head>
 
 <body>
+    <div class="controls">
+        <input type="text" placeholder="Enter your name..." id="name" />
+        <button id="client-connection" class="connected">Disconnect</button>
+    </div>
+
     <div id="editor"></div>
 </body>
 
