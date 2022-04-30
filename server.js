@@ -1,3 +1,9 @@
+const env = process.env.NODE_ENV || 'development';
+
+if (env === 'development') {
+    require('dotenv').config()
+}
+
 const http = require('http');
 const express = require('express');
 const shareDB = require('sharedb');
@@ -8,7 +14,10 @@ const { v4: uuidv4 } = require('uuid');
 
 shareDB.types.register(richText.type)
 
-const backend = new shareDB({ presence: true, doNotForwardSendPresenceErrorsToClient: true })
+// installing mongoDB adapter for shareDB
+const db = require('sharedb-mongo')(process.env.MONGO_URI);
+
+const backend = new shareDB({ db: db, presence: true, doNotForwardSendPresenceErrorsToClient: true })
 
 const app = express()
 app.set('view engine', 'ejs')
@@ -37,7 +46,7 @@ app.get('/:roomId', (req, res) => {
 
         // if document does not exist, create it
         if (doc.type === null) {
-            doc.create([{ insert: '' }], 'rich-text')
+            doc.create([{ insert: 'Compose an Epic...', attributes: { italic: true, font: "playfair" } }], 'rich-text')
         }
     })
 

@@ -20,11 +20,13 @@
     "reconnecting-websocket": "^4.4.0",
     "rich-text": "^4.1.0",
     "sharedb": "^2.2.5",
+    "sharedb-mongo": "^1.0.0",
     "tinycolor2": "^1.4.2",
     "uuid": "^8.3.2",
     "ws": "^8.5.0"
   },
   "devDependencies": {
-    "browserify": "^17.0.0"
+    "browserify": "^17.0.0",
+    "dotenv": "^16.0.0"
   }
 }
