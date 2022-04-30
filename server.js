@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 
 shareDB.types.register(richText.type)
 
-const backend = new shareDB()
+const backend = new shareDB({ presence: true, doNotForwardSendPresenceErrorsToClient: true })
 
 const app = express()
 app.set('view engine', 'ejs')
@@ -37,7 +37,7 @@ app.get('/:roomId', (req, res) => {
 
         // if document does not exist, create it
         if (doc.type === null) {
-            doc.create([{ insert: 'Hi' }], 'rich-text')
+            doc.create([{ insert: '' }], 'rich-text')
         }
     })
 

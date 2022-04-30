@@ -1,39 +1,112 @@
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
-const ReconnectingWebSocket = require('reconnecting-websocket');
-const sharedb = require('sharedb/lib/client');
-const richText = require('rich-text');
-const Quill = require('quill');
+const ReconnectingWebSocket = require('reconnecting-websocket')
+const sharedb = require('sharedb/lib/client')
+const richText = require('rich-text')
+const Quill = require('quill')
+const QuillCursors = require('quill-cursors')
+const tinycolor = require('tinycolor2')
+const ObjectID = require('bson-objectid')
 
-sharedb.types.register(richText.type);
+sharedb.types.register(richText.type)
+Quill.register('modules/cursors', QuillCursors)
 
-// Open WebSocket connection to ShareDB server
+let colors = {}
+
+const collection = 'text-editor'
+const id = ROOM_ID
+const presenceId = new ObjectID().toString()
+
 const socket = new ReconnectingWebSocket('ws://' + window.location.host);
-const connection = new sharedb.Connection(socket);
+const connection = new sharedb.Connection(socket)
 
-// get the document and connect to it
-const doc = connection.get('text-editor', ROOM_ID)
+const doc = connection.get(collection, id);
 
-// subscribe to the document for changes
 doc.subscribe(function (err) {
     if (err) throw err;
+    initialiseQuill(doc);
+});
 
-    const quill = new Quill('#editor', { theme: 'snow' });
+
+const Font = Quill.import("formats/font")
+const Size = Quill.import('attributors/style/size');
+
+// register fonts
+Font.whitelist = [
+    "arial",
+    "roboto",
+    "montserrat",
+    "helvetica",
+    "poppins",
+    "merriweather",
+    "playfair"
+]
+Quill.register(Font, true)
+
+// register font sizes
+fontSizes = ['14px', '16px', '18px', '22px', '28px', '36px']
+Size.whitelist = fontSizes;
+Quill.register(Size, true);
+
+function initialiseQuill(doc) {
+    const quill = new Quill('#editor', {
+        theme: 'snow',
+        modules: {
+            toolbar: '#toolbar',
+            cursors: true
+        },
+    });
+
+    // change the link placeholder to www.github.com
+    const tooltip = quill.theme.tooltip;
+    const input = tooltip.root.querySelector("input[data-link]");
+    input.dataset.link = 'www.github.com';
+
     quill.setContents(doc.data);
 
-    // listen for changes on the editor
     quill.on('text-change', function (delta, oldDelta, source) {
         if (source !== 'user') return;
-
-        doc.submitOp(delta, { source: quill });
+        doc.submitOp(delta);
     });
 
     doc.on('op', function (op, source) {
-        // if it is applied by self return
-        if (source === quill) return
-        quill.updateContents(op)
-    })
-})
-},{"quill":15,"reconnecting-websocket":16,"rich-text":17,"sharedb/lib/client":26}],2:[function(require,module,exports){
+        if (source) return;
+        quill.updateContents(op);
+    });
+
+    // initializing multi cursors
+    const cursors = quill.getModule('cursors');
+
+    const presence = doc.connection.getDocPresence(collection, id);
+
+    presence.subscribe(function (error) {
+        if (error) throw error;
+    });
+
+    const localPresence = presence.create(presenceId);
+
+    quill.on('selection-change', function (range, oldRange, source) {
+
+        if (source !== 'user') return;
+
+        if (!range) return;
+
+        // range.name = nameInput.value;
+        localPresence.submit(range, function (error) {
+            if (error) throw error;
+        });
+    });
+
+    presence.on('receive', function (id, range) {
+        colors[id] = colors[id] || tinycolor.random().toHexString();
+        var name = (range && range.name) || 'Anonymous';
+        cursors.createCursor(id, name, colors[id]);
+        cursors.moveCursor(id, range);
+    });
+
+    return quill;
+}
+
+},{"bson-objectid":3,"quill":17,"quill-cursors":16,"reconnecting-websocket":18,"rich-text":19,"sharedb/lib/client":28,"tinycolor2":49}],2:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -186,6 +259,317 @@ function fromByteArray (uint8) {
 }
 
 },{}],3:[function(require,module,exports){
+(function (process){(function (){
+
+var MACHINE_ID = Math.floor(Math.random() * 0xFFFFFF);
+var index = ObjectID.index = parseInt(Math.random() * 0xFFFFFF, 10);
+var pid = (typeof process === 'undefined' || typeof process.pid !== 'number' ? Math.floor(Math.random() * 100000) : process.pid) % 0xFFFF;
+
+/**
+ * Determine if an object is Buffer
+ *
+ * Author:   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
+ * License:  MIT
+ *
+ */
+var isBuffer = function (obj) {
+  return !!(
+  obj != null &&
+  obj.constructor &&
+  typeof obj.constructor.isBuffer === 'function' &&
+  obj.constructor.isBuffer(obj)
+  )
+};
+
+// Precomputed hex table enables speedy hex string conversion
+var hexTable = [];
+for (var i = 0; i < 256; i++) {
+  hexTable[i] = (i <= 15 ? '0' : '') + i.toString(16);
+}
+
+// Regular expression that checks for hex value
+var checkForHexRegExp = new RegExp('^[0-9a-fA-F]{24}$');
+
+// Lookup tables
+var decodeLookup = [];
+i = 0;
+while (i < 10) decodeLookup[0x30 + i] = i++;
+while (i < 16) decodeLookup[0x41 - 10 + i] = decodeLookup[0x61 - 10 + i] = i++;
+
+/**
+ * Create a new immutable ObjectID instance
+ *
+ * @class Represents the BSON ObjectID type
+ * @param {String|Number} id Can be a 24 byte hex string, 12 byte binary string or a Number.
+ * @return {Object} instance of ObjectID.
+ */
+function ObjectID(id) {
+  if(!(this instanceof ObjectID)) return new ObjectID(id);
+  if(id && ((id instanceof ObjectID) || id._bsontype==="ObjectID"))
+    return id;
+
+  this._bsontype = 'ObjectID';
+
+  // The most common usecase (blank id, new objectId instance)
+  if (id == null || typeof id === 'number') {
+    // Generate a new id
+    this.id = this.generate(id);
+    // Return the object
+    return;
+  }
+
+  // Check if the passed in id is valid
+  var valid = ObjectID.isValid(id);
+
+  // Throw an error if it's not a valid setup
+  if (!valid && id != null) {
+    throw new Error(
+      'Argument passed in must be a single String of 12 bytes or a string of 24 hex characters'
+    );
+  } else if (valid && typeof id === 'string' && id.length === 24) {
+    return ObjectID.createFromHexString(id);
+  } else if (id != null && id.length === 12) {
+    // assume 12 byte string
+    this.id = id;
+  } else if (id != null && typeof id.toHexString === 'function') {
+    // Duck-typing to support ObjectId from different npm packages
+    return id;
+  } else {
+    throw new Error(
+      'Argument passed in must be a single String of 12 bytes or a string of 24 hex characters'
+    );
+  }
+}
+module.exports = ObjectID;
+ObjectID.default = ObjectID;
+
+/**
+ * Creates an ObjectID from a second based number, with the rest of the ObjectID zeroed out. Used for comparisons or sorting the ObjectID.
+ *
+ * @param {Number} time an integer number representing a number of seconds.
+ * @return {ObjectID} return the created ObjectID
+ * @api public
+ */
+ObjectID.createFromTime = function(time){
+  time = parseInt(time, 10) % 0xFFFFFFFF;
+  return new ObjectID(hex(8,time)+"0000000000000000");
+};
+
+/**
+ * Creates an ObjectID from a hex string representation of an ObjectID.
+ *
+ * @param {String} hexString create a ObjectID from a passed in 24 byte hexstring.
+ * @return {ObjectID} return the created ObjectID
+ * @api public
+ */
+ObjectID.createFromHexString = function(hexString) {
+  // Throw an error if it's not a valid setup
+  if (typeof hexString === 'undefined' || (hexString != null && hexString.length !== 24)) {
+    throw new Error(
+      'Argument passed in must be a single String of 12 bytes or a string of 24 hex characters'
+    );
+  }
+
+  // Calculate lengths
+  var data = '';
+  var i = 0;
+
+  while (i < 24) {
+    data += String.fromCharCode((decodeLookup[hexString.charCodeAt(i++)] << 4) | decodeLookup[hexString.charCodeAt(i++)]);
+  }
+
+  return new ObjectID(data);
+};
+
+/**
+ * Checks if a value is a valid bson ObjectId
+ *
+ * @param {String} objectid Can be a 24 byte hex string or an instance of ObjectID.
+ * @return {Boolean} return true if the value is a valid bson ObjectID, return false otherwise.
+ * @api public
+ *
+ * THE NATIVE DOCUMENTATION ISN'T CLEAR ON THIS GUY!
+ * http://mongodb.github.io/node-mongodb-native/api-bson-generated/objectid.html#objectid-isvalid
+ */
+ObjectID.isValid = function(id) {
+  if (id == null) return false;
+
+  if (typeof id === 'number') {
+    return true;
+  }
+
+  if (typeof id === 'string') {
+    return id.length === 12 || (id.length === 24 && checkForHexRegExp.test(id));
+  }
+
+  if (id instanceof ObjectID) {
+    return true;
+  }
+
+  if (isBuffer(id)) {
+    return true;
+  }
+
+  // Duck-Typing detection of ObjectId like objects
+  if (
+      typeof id.toHexString === 'function' &&
+      (id.id instanceof _Buffer || typeof id.id === 'string')
+  ) {
+    return id.id.length === 12 || (id.id.length === 24 && checkForHexRegExp.test(id.id));
+  }
+
+  return false;
+};
+
+ObjectID.prototype = {
+  constructor: ObjectID,
+
+  /**
+   * Return the ObjectID id as a 24 byte hex string representation
+   *
+   * @return {String} return the 24 byte hex string representation.
+   * @api public
+   */
+  toHexString: function() {
+    if (!this.id || !this.id.length) {
+      throw new Error(
+        'invalid ObjectId, ObjectId.id must be either a string or a Buffer, but is [' +
+          JSON.stringify(this.id) +
+          ']'
+      );
+    }
+
+    if (this.id.length === 24) {
+      return this.id;
+    }
+
+    if (isBuffer(this.id)) {
+      return this.id.toString('hex')
+    }
+
+    var hexString = '';
+    for (var i = 0; i < this.id.length; i++) {
+      hexString += hexTable[this.id.charCodeAt(i)];
+    }
+
+    return hexString;
+  },
+
+  /**
+   * Compares the equality of this ObjectID with `otherID`.
+   *
+   * @param {Object} otherId ObjectID instance to compare against.
+   * @return {Boolean} the result of comparing two ObjectID's
+   * @api public
+   */
+  equals: function (otherId){
+    if (otherId instanceof ObjectID) {
+      return this.toString() === otherId.toString();
+    } else if (
+      typeof otherId === 'string' &&
+      ObjectID.isValid(otherId) &&
+      otherId.length === 12 &&
+      isBuffer(this.id)
+    ) {
+      return otherId === this.id.toString('binary');
+    } else if (typeof otherId === 'string' && ObjectID.isValid(otherId) && otherId.length === 24) {
+      return otherId.toLowerCase() === this.toHexString();
+    } else if (typeof otherId === 'string' && ObjectID.isValid(otherId) && otherId.length === 12) {
+      return otherId === this.id;
+    } else if (otherId != null && (otherId instanceof ObjectID || otherId.toHexString)) {
+      return otherId.toHexString() === this.toHexString();
+    } else {
+      return false;
+    }
+  },
+
+  /**
+   * Returns the generation date (accurate up to the second) that this ID was generated.
+   *
+   * @return {Date} the generation date
+   * @api public
+   */
+  getTimestamp: function(){
+    var timestamp = new Date();
+    var time;
+    if (isBuffer(this.id)) {
+      time = this.id[3] | (this.id[2] << 8) | (this.id[1] << 16) | (this.id[0] << 24);
+    } else {
+      time = this.id.charCodeAt(3) | (this.id.charCodeAt(2) << 8) | (this.id.charCodeAt(1) << 16) | (this.id.charCodeAt(0) << 24);
+    }
+    timestamp.setTime(Math.floor(time) * 1000);
+    return timestamp;
+  },
+
+  /**
+  * Generate a 12 byte id buffer used in ObjectID's
+  *
+  * @method
+  * @param {number} [time] optional parameter allowing to pass in a second based timestamp.
+  * @return {string} return the 12 byte id buffer string.
+  */
+  generate: function (time) {
+    if ('number' !== typeof time) {
+      time = ~~(Date.now() / 1000);
+    }
+
+    //keep it in the ring!
+    time = parseInt(time, 10) % 0xFFFFFFFF;
+
+    var inc = next();
+
+    return String.fromCharCode(
+      ((time >> 24) & 0xFF),
+      ((time >> 16) & 0xFF),
+      ((time >> 8) & 0xFF),
+      (time & 0xFF),
+      ((MACHINE_ID >> 16) & 0xFF),
+      ((MACHINE_ID >> 8) & 0xFF),
+      (MACHINE_ID & 0xFF),
+      ((pid >> 8) & 0xFF),
+      (pid & 0xFF),
+      ((inc >> 16) & 0xFF),
+      ((inc >> 8) & 0xFF),
+      (inc & 0xFF)
+    )
+  },
+};
+
+function next() {
+  return index = (index+1) % 0xFFFFFF;
+}
+
+function hex(length, n) {
+  n = n.toString(16);
+  return (n.length===length)? n : "00000000".substring(n.length, length) + n;
+}
+
+function buffer(str) {
+  var i=0,out=[];
+
+  if(str.length===24)
+    for(;i<24; out.push(parseInt(str[i]+str[i+1], 16)),i+=2);
+
+  else if(str.length===12)
+    for(;i<12; out.push(str.charCodeAt(i)),i++);
+
+  return out;
+}
+
+var inspect = (Symbol && Symbol.for && Symbol.for('nodejs.util.inspect.custom')) || 'inspect';
+
+/**
+ * Converts to a string representation of this Id.
+ *
+ * @return {String} return the 24 byte hex string representation.
+ * @api private
+ */
+ObjectID.prototype[inspect] = function() { return "ObjectID("+this+")" };
+ObjectID.prototype.toJSON = ObjectID.prototype.toHexString;
+ObjectID.prototype.toString = ObjectID.prototype.toHexString;
+
+}).call(this)}).call(this,require('_process'))
+},{"_process":15}],4:[function(require,module,exports){
 (function (Buffer){(function (){
 /*!
  * The buffer module from node.js, for the browser.
@@ -1966,7 +2350,7 @@ function numberIsNaN (obj) {
 }
 
 }).call(this)}).call(this,require("buffer").Buffer)
-},{"base64-js":2,"buffer":3,"ieee754":7}],4:[function(require,module,exports){
+},{"base64-js":2,"buffer":4,"ieee754":8}],5:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2465,7 +2849,7 @@ function eventTargetAgnosticAddListener(emitter, name, listener, flags) {
   }
 }
 
-},{}],5:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 'use strict';
 
 var isArray = Array.isArray;
@@ -2522,7 +2906,7 @@ module.exports = function equal(a, b) {
   return a!==a && b!==b;
 };
 
-},{}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 var hat = module.exports = function (bits, base) {
     if (!base) base = 16;
     if (bits === undefined) bits = 128;
@@ -2586,7 +2970,7 @@ hat.rack = function (bits, base, expandBy) {
     return fn;
 };
 
-},{}],7:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
 /*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
@@ -2673,7 +3057,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}],8:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 (function (global){(function (){
 /**
  * lodash (Custom Build) <https://lodash.com/>
@@ -4425,7 +4809,7 @@ function stubFalse() {
 module.exports = cloneDeep;
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],9:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 (function (global){(function (){
 /**
  * Lodash (Custom Build) <https://lodash.com/>
@@ -6277,7 +6661,7 @@ function stubFalse() {
 module.exports = isEqual;
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],10:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 // These methods let you build a transform function from a transformComponent
 // function for OT types like JSON0 in which operations are lists of components
 // and transforming them requires N^2 work. I find it kind of nasty that I need
@@ -6357,7 +6741,7 @@ function bootstrapTransform(type, transformComponent, checkValidOp, append) {
   };
 };
 
-},{}],11:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 // Only the JSON type is exported, because the text type is deprecated
 // otherwise. (If you want to use it somewhere, you're welcome to pull it out
 // into a separate module that json0 can depend on).
@@ -6366,7 +6750,7 @@ module.exports = {
   type: require('./json0')
 };
 
-},{"./json0":12}],12:[function(require,module,exports){
+},{"./json0":13}],13:[function(require,module,exports){
 /*
  This is the implementation of the JSON OT type.
 
@@ -7031,7 +7415,7 @@ json.registerSubtype(text);
 module.exports = json;
 
 
-},{"./bootstrapTransform":10,"./text0":13}],13:[function(require,module,exports){
+},{"./bootstrapTransform":11,"./text0":14}],14:[function(require,module,exports){
 // DEPRECATED!
 //
 // This type works, but is not exported. Its included here because the JSON0
@@ -7289,7 +7673,7 @@ text.invert = function(op) {
 
 require('./bootstrapTransform')(text, transformComponent, checkValidOp, append);
 
-},{"./bootstrapTransform":10}],14:[function(require,module,exports){
+},{"./bootstrapTransform":11}],15:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -7475,7 +7859,10 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],15:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
+/*! For license information please see quill-cursors.js.LICENSE.txt */
+!function(t,e){"object"==typeof exports&&"object"==typeof module?module.exports=e():"function"==typeof define&&define.amd?define([],e):"object"==typeof exports?exports.QuillCursors=e():t.QuillCursors=e()}(self,(function(){return(()=>{var t={582:(t,e,r)=>{"use strict";r.d(e,{Z:()=>a});var n=r(81),i=r.n(n),o=r(645),s=r.n(o)()(i());s.push([t.id,".ql-container{position:relative;overflow:hidden}.ql-cursor.hidden{display:none}.ql-cursor .ql-cursor-caret-container,.ql-cursor .ql-cursor-flag{position:absolute}.ql-cursor .ql-cursor-flag{z-index:1;transform:translate3d(-1px, -100%, 0);opacity:0;visibility:hidden;color:#fff;padding-bottom:2px;border-radius:0 3px 3px 0}.ql-cursor .ql-cursor-flag.flag-flipped{border-radius:3px 0 0 3px;transform:translate3d(calc(-100% + 1px ), -100%, 0)}@media screen{.ql-cursor .ql-cursor-flag{transition:opacity 0ms cubic-bezier(0.25, 0.46, 0.45, 0.94) 0ms,visibility 0ms cubic-bezier(0.25, 0.46, 0.45, 0.94) 0ms}}.ql-cursor .ql-cursor-flag .ql-cursor-name{margin-left:5px;margin-right:5px;display:inline-block;margin-top:-2px;white-space:nowrap}.ql-cursor .ql-cursor-flag:hover,.ql-cursor .ql-cursor-flag.show-flag,.ql-cursor .ql-cursor-caret-container:hover+.ql-cursor-flag{opacity:1;visibility:visible;transition:none}.ql-cursor .ql-cursor-flag.no-delay[style]{transition-delay:unset !important}.ql-cursor .ql-cursor-caret-container{margin-left:-9px;padding:0 9px;z-index:1;cursor:text}.ql-cursor .ql-cursor-caret-container:hover{pointer-events:none}.ql-cursor .ql-cursor-caret-container .ql-cursor-caret{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background-color:attr(data-color)}.ql-cursor .ql-cursor-selection-block{position:absolute;pointer-events:none}",""]);const a=s},645:t=>{"use strict";t.exports=function(t){var e=[];return e.toString=function(){return this.map((function(e){var r="",n=void 0!==e[5];return e[4]&&(r+="@supports (".concat(e[4],") {")),e[2]&&(r+="@media ".concat(e[2]," {")),n&&(r+="@layer".concat(e[5].length>0?" ".concat(e[5]):""," {")),r+=t(e),n&&(r+="}"),e[2]&&(r+="}"),e[4]&&(r+="}"),r})).join("")},e.i=function(t,r,n,i,o){"string"==typeof t&&(t=[[null,t,void 0]]);var s={};if(n)for(var a=0;a<this.length;a++){var u=this[a][0];null!=u&&(s[u]=!0)}for(var c=0;c<t.length;c++){var l=[].concat(t[c]);n&&s[l[0]]||(void 0!==o&&(void 0===l[5]||(l[1]="@layer".concat(l[5].length>0?" ".concat(l[5]):""," {").concat(l[1],"}")),l[5]=o),r&&(l[2]?(l[1]="@media ".concat(l[2]," {").concat(l[1],"}"),l[2]=r):l[2]=r),i&&(l[4]?(l[1]="@supports (".concat(l[4],") {").concat(l[1],"}"),l[4]=i):l[4]="".concat(i)),e.push(l))}},e}},81:t=>{"use strict";t.exports=function(t){return t[1]}},465:(t,e,r)=>{t=r.nmd(t);var n="__lodash_hash_undefined__",i=9007199254740991,o="[object Arguments]",s="[object Boolean]",a="[object Date]",u="[object Function]",c="[object GeneratorFunction]",l="[object Map]",f="[object Number]",h="[object Object]",p="[object Promise]",d="[object RegExp]",g="[object Set]",_="[object String]",v="[object Symbol]",b="[object WeakMap]",y="[object ArrayBuffer]",m="[object DataView]",A="[object Float32Array]",w="[object Float64Array]",x="[object Int8Array]",S="[object Int16Array]",C="[object Int32Array]",E="[object Uint8Array]",O="[object Uint8ClampedArray]",j="[object Uint16Array]",L="[object Uint32Array]",k=/\w*$/,M=/^\[object .+?Constructor\]$/,T=/^(?:0|[1-9]\d*)$/,R={};R[o]=R["[object Array]"]=R[y]=R[m]=R[s]=R[a]=R[A]=R[w]=R[x]=R[S]=R[C]=R[l]=R[f]=R[h]=R[d]=R[g]=R[_]=R[v]=R[E]=R[O]=R[j]=R[L]=!0,R["[object Error]"]=R[u]=R[b]=!1;var N="object"==typeof r.g&&r.g&&r.g.Object===Object&&r.g,q="object"==typeof self&&self&&self.Object===Object&&self,D=N||q||Function("return this")(),F=e&&!e.nodeType&&e,I=F&&t&&!t.nodeType&&t,B=I&&I.exports===F;function P(t,e){return t.set(e[0],e[1]),t}function z(t,e){return t.add(e),t}function H(t,e,r,n){var i=-1,o=t?t.length:0;for(n&&o&&(r=t[++i]);++i<o;)r=e(r,t[i],i,t);return r}function U(t){var e=!1;if(null!=t&&"function"!=typeof t.toString)try{e=!!(t+"")}catch(t){}return e}function G(t){var e=-1,r=Array(t.size);return t.forEach((function(t,n){r[++e]=[n,t]})),r}function $(t,e){return function(r){return t(e(r))}}function W(t){var e=-1,r=Array(t.size);return t.forEach((function(t){r[++e]=t})),r}var V,Q=Array.prototype,X=Function.prototype,Z=Object.prototype,Y=D["__core-js_shared__"],K=(V=/[^.]+$/.exec(Y&&Y.keys&&Y.keys.IE_PROTO||""))?"Symbol(src)_1."+V:"",J=X.toString,tt=Z.hasOwnProperty,et=Z.toString,rt=RegExp("^"+J.call(tt).replace(/[\\^$.*+?()[\]{}|]/g,"\\$&").replace(/hasOwnProperty|(function).*?(?=\\\()| for .+?(?=\\\])/g,"$1.*?")+"$"),nt=B?D.Buffer:void 0,it=D.Symbol,ot=D.Uint8Array,st=$(Object.getPrototypeOf,Object),at=Object.create,ut=Z.propertyIsEnumerable,ct=Q.splice,lt=Object.getOwnPropertySymbols,ft=nt?nt.isBuffer:void 0,ht=$(Object.keys,Object),pt=Dt(D,"DataView"),dt=Dt(D,"Map"),gt=Dt(D,"Promise"),_t=Dt(D,"Set"),vt=Dt(D,"WeakMap"),bt=Dt(Object,"create"),yt=zt(pt),mt=zt(dt),At=zt(gt),wt=zt(_t),xt=zt(vt),St=it?it.prototype:void 0,Ct=St?St.valueOf:void 0;function Et(t){var e=-1,r=t?t.length:0;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function Ot(t){var e=-1,r=t?t.length:0;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function jt(t){var e=-1,r=t?t.length:0;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function Lt(t){this.__data__=new Ot(t)}function kt(t,e,r){var n=t[e];tt.call(t,e)&&Ht(n,r)&&(void 0!==r||e in t)||(t[e]=r)}function Mt(t,e){for(var r=t.length;r--;)if(Ht(t[r][0],e))return r;return-1}function Tt(t,e,r,n,i,p,b){var M;if(n&&(M=p?n(t,i,p,b):n(t)),void 0!==M)return M;if(!Vt(t))return t;var T=Ut(t);if(T){if(M=function(t){var e=t.length,r=t.constructor(e);return e&&"string"==typeof t[0]&&tt.call(t,"index")&&(r.index=t.index,r.input=t.input),r}(t),!e)return function(t,e){var r=-1,n=t.length;for(e||(e=Array(n));++r<n;)e[r]=t[r];return e}(t,M)}else{var N=It(t),q=N==u||N==c;if($t(t))return function(t,e){if(e)return t.slice();var r=new t.constructor(t.length);return t.copy(r),r}(t,e);if(N==h||N==o||q&&!p){if(U(t))return p?t:{};if(M=function(t){return"function"!=typeof t.constructor||Pt(t)?{}:Vt(e=st(t))?at(e):{};var e}(q?{}:t),!e)return function(t,e){return Nt(t,Ft(t),e)}(t,function(t,e){return t&&Nt(e,Qt(e),t)}(M,t))}else{if(!R[N])return p?t:{};M=function(t,e,r,n){var i,o=t.constructor;switch(e){case y:return Rt(t);case s:case a:return new o(+t);case m:return function(t,e){var r=e?Rt(t.buffer):t.buffer;return new t.constructor(r,t.byteOffset,t.byteLength)}(t,n);case A:case w:case x:case S:case C:case E:case O:case j:case L:return function(t,e){var r=e?Rt(t.buffer):t.buffer;return new t.constructor(r,t.byteOffset,t.length)}(t,n);case l:return function(t,e,r){return H(e?r(G(t),!0):G(t),P,new t.constructor)}(t,n,r);case f:case _:return new o(t);case d:return function(t){var e=new t.constructor(t.source,k.exec(t));return e.lastIndex=t.lastIndex,e}(t);case g:return function(t,e,r){return H(e?r(W(t),!0):W(t),z,new t.constructor)}(t,n,r);case v:return i=t,Ct?Object(Ct.call(i)):{}}}(t,N,Tt,e)}}b||(b=new Lt);var D=b.get(t);if(D)return D;if(b.set(t,M),!T)var F=r?function(t){return function(t,e,r){var n=e(t);return Ut(t)?n:function(t,e){for(var r=-1,n=e.length,i=t.length;++r<n;)t[i+r]=e[r];return t}(n,r(t))}(t,Qt,Ft)}(t):Qt(t);return function(t,e){for(var r=-1,n=t?t.length:0;++r<n&&!1!==e(t[r],r););}(F||t,(function(i,o){F&&(i=t[o=i]),kt(M,o,Tt(i,e,r,n,o,t,b))})),M}function Rt(t){var e=new t.constructor(t.byteLength);return new ot(e).set(new ot(t)),e}function Nt(t,e,r,n){r||(r={});for(var i=-1,o=e.length;++i<o;){var s=e[i],a=n?n(r[s],t[s],s,r,t):void 0;kt(r,s,void 0===a?t[s]:a)}return r}function qt(t,e){var r,n,i=t.__data__;return("string"==(n=typeof(r=e))||"number"==n||"symbol"==n||"boolean"==n?"__proto__"!==r:null===r)?i["string"==typeof e?"string":"hash"]:i.map}function Dt(t,e){var r=function(t,e){return null==t?void 0:t[e]}(t,e);return function(t){return!(!Vt(t)||(e=t,K&&K in e))&&(Wt(t)||U(t)?rt:M).test(zt(t));var e}(r)?r:void 0}Et.prototype.clear=function(){this.__data__=bt?bt(null):{}},Et.prototype.delete=function(t){return this.has(t)&&delete this.__data__[t]},Et.prototype.get=function(t){var e=this.__data__;if(bt){var r=e[t];return r===n?void 0:r}return tt.call(e,t)?e[t]:void 0},Et.prototype.has=function(t){var e=this.__data__;return bt?void 0!==e[t]:tt.call(e,t)},Et.prototype.set=function(t,e){return this.__data__[t]=bt&&void 0===e?n:e,this},Ot.prototype.clear=function(){this.__data__=[]},Ot.prototype.delete=function(t){var e=this.__data__,r=Mt(e,t);return!(r<0||(r==e.length-1?e.pop():ct.call(e,r,1),0))},Ot.prototype.get=function(t){var e=this.__data__,r=Mt(e,t);return r<0?void 0:e[r][1]},Ot.prototype.has=function(t){return Mt(this.__data__,t)>-1},Ot.prototype.set=function(t,e){var r=this.__data__,n=Mt(r,t);return n<0?r.push([t,e]):r[n][1]=e,this},jt.prototype.clear=function(){this.__data__={hash:new Et,map:new(dt||Ot),string:new Et}},jt.prototype.delete=function(t){return qt(this,t).delete(t)},jt.prototype.get=function(t){return qt(this,t).get(t)},jt.prototype.has=function(t){return qt(this,t).has(t)},jt.prototype.set=function(t,e){return qt(this,t).set(t,e),this},Lt.prototype.clear=function(){this.__data__=new Ot},Lt.prototype.delete=function(t){return this.__data__.delete(t)},Lt.prototype.get=function(t){return this.__data__.get(t)},Lt.prototype.has=function(t){return this.__data__.has(t)},Lt.prototype.set=function(t,e){var r=this.__data__;if(r instanceof Ot){var n=r.__data__;if(!dt||n.length<199)return n.push([t,e]),this;r=this.__data__=new jt(n)}return r.set(t,e),this};var Ft=lt?$(lt,Object):function(){return[]},It=function(t){return et.call(t)};function Bt(t,e){return!!(e=null==e?i:e)&&("number"==typeof t||T.test(t))&&t>-1&&t%1==0&&t<e}function Pt(t){var e=t&&t.constructor;return t===("function"==typeof e&&e.prototype||Z)}function zt(t){if(null!=t){try{return J.call(t)}catch(t){}try{return t+""}catch(t){}}return""}function Ht(t,e){return t===e||t!=t&&e!=e}(pt&&It(new pt(new ArrayBuffer(1)))!=m||dt&&It(new dt)!=l||gt&&It(gt.resolve())!=p||_t&&It(new _t)!=g||vt&&It(new vt)!=b)&&(It=function(t){var e=et.call(t),r=e==h?t.constructor:void 0,n=r?zt(r):void 0;if(n)switch(n){case yt:return m;case mt:return l;case At:return p;case wt:return g;case xt:return b}return e});var Ut=Array.isArray;function Gt(t){return null!=t&&function(t){return"number"==typeof t&&t>-1&&t%1==0&&t<=i}(t.length)&&!Wt(t)}var $t=ft||function(){return!1};function Wt(t){var e=Vt(t)?et.call(t):"";return e==u||e==c}function Vt(t){var e=typeof t;return!!t&&("object"==e||"function"==e)}function Qt(t){return Gt(t)?function(t,e){var r=Ut(t)||function(t){return function(t){return function(t){return!!t&&"object"==typeof t}(t)&&Gt(t)}(t)&&tt.call(t,"callee")&&(!ut.call(t,"callee")||et.call(t)==o)}(t)?function(t,e){for(var r=-1,n=Array(t);++r<t;)n[r]=e(r);return n}(t.length,String):[],n=r.length,i=!!n;for(var s in t)!e&&!tt.call(t,s)||i&&("length"==s||Bt(s,n))||r.push(s);return r}(t):function(t){if(!Pt(t))return ht(t);var e=[];for(var r in Object(t))tt.call(t,r)&&"constructor"!=r&&e.push(r);return e}(t)}t.exports=function(t){return Tt(t,!0,!0)}},307:(t,e,r)=>{t=r.nmd(t);var n="__lodash_hash_undefined__",i=9007199254740991,o="[object Arguments]",s="[object Array]",a="[object Boolean]",u="[object Date]",c="[object Error]",l="[object Function]",f="[object Map]",h="[object Number]",p="[object Object]",d="[object Promise]",g="[object RegExp]",_="[object Set]",v="[object String]",b="[object WeakMap]",y="[object ArrayBuffer]",m="[object DataView]",A=/^\[object .+?Constructor\]$/,w=/^(?:0|[1-9]\d*)$/,x={};x["[object Float32Array]"]=x["[object Float64Array]"]=x["[object Int8Array]"]=x["[object Int16Array]"]=x["[object Int32Array]"]=x["[object Uint8Array]"]=x["[object Uint8ClampedArray]"]=x["[object Uint16Array]"]=x["[object Uint32Array]"]=!0,x[o]=x[s]=x[y]=x[a]=x[m]=x[u]=x[c]=x[l]=x[f]=x[h]=x[p]=x[g]=x[_]=x[v]=x[b]=!1;var S="object"==typeof r.g&&r.g&&r.g.Object===Object&&r.g,C="object"==typeof self&&self&&self.Object===Object&&self,E=S||C||Function("return this")(),O=e&&!e.nodeType&&e,j=O&&t&&!t.nodeType&&t,L=j&&j.exports===O,k=L&&S.process,M=function(){try{return k&&k.binding&&k.binding("util")}catch(t){}}(),T=M&&M.isTypedArray;function R(t,e){for(var r=-1,n=null==t?0:t.length;++r<n;)if(e(t[r],r,t))return!0;return!1}function N(t){var e=-1,r=Array(t.size);return t.forEach((function(t,n){r[++e]=[n,t]})),r}function q(t){var e=-1,r=Array(t.size);return t.forEach((function(t){r[++e]=t})),r}var D,F,I,B=Array.prototype,P=Function.prototype,z=Object.prototype,H=E["__core-js_shared__"],U=P.toString,G=z.hasOwnProperty,$=(D=/[^.]+$/.exec(H&&H.keys&&H.keys.IE_PROTO||""))?"Symbol(src)_1."+D:"",W=z.toString,V=RegExp("^"+U.call(G).replace(/[\\^$.*+?()[\]{}|]/g,"\\$&").replace(/hasOwnProperty|(function).*?(?=\\\()| for .+?(?=\\\])/g,"$1.*?")+"$"),Q=L?E.Buffer:void 0,X=E.Symbol,Z=E.Uint8Array,Y=z.propertyIsEnumerable,K=B.splice,J=X?X.toStringTag:void 0,tt=Object.getOwnPropertySymbols,et=Q?Q.isBuffer:void 0,rt=(F=Object.keys,I=Object,function(t){return F(I(t))}),nt=jt(E,"DataView"),it=jt(E,"Map"),ot=jt(E,"Promise"),st=jt(E,"Set"),at=jt(E,"WeakMap"),ut=jt(Object,"create"),ct=Tt(nt),lt=Tt(it),ft=Tt(ot),ht=Tt(st),pt=Tt(at),dt=X?X.prototype:void 0,gt=dt?dt.valueOf:void 0;function _t(t){var e=-1,r=null==t?0:t.length;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function vt(t){var e=-1,r=null==t?0:t.length;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function bt(t){var e=-1,r=null==t?0:t.length;for(this.clear();++e<r;){var n=t[e];this.set(n[0],n[1])}}function yt(t){var e=-1,r=null==t?0:t.length;for(this.__data__=new bt;++e<r;)this.add(t[e])}function mt(t){var e=this.__data__=new vt(t);this.size=e.size}function At(t,e){for(var r=t.length;r--;)if(Rt(t[r][0],e))return r;return-1}function wt(t){return null==t?void 0===t?"[object Undefined]":"[object Null]":J&&J in Object(t)?function(t){var e=G.call(t,J),r=t[J];try{t[J]=void 0;var n=!0}catch(t){}var i=W.call(t);return n&&(e?t[J]=r:delete t[J]),i}(t):function(t){return W.call(t)}(t)}function xt(t){return Pt(t)&&wt(t)==o}function St(t,e,r,n,i){return t===e||(null==t||null==e||!Pt(t)&&!Pt(e)?t!=t&&e!=e:function(t,e,r,n,i,l){var d=qt(t),b=qt(e),A=d?s:kt(t),w=b?s:kt(e),x=(A=A==o?p:A)==p,S=(w=w==o?p:w)==p,C=A==w;if(C&&Dt(t)){if(!Dt(e))return!1;d=!0,x=!1}if(C&&!x)return l||(l=new mt),d||zt(t)?Ct(t,e,r,n,i,l):function(t,e,r,n,i,o,s){switch(r){case m:if(t.byteLength!=e.byteLength||t.byteOffset!=e.byteOffset)return!1;t=t.buffer,e=e.buffer;case y:return!(t.byteLength!=e.byteLength||!o(new Z(t),new Z(e)));case a:case u:case h:return Rt(+t,+e);case c:return t.name==e.name&&t.message==e.message;case g:case v:return t==e+"";case f:var l=N;case _:var p=1&n;if(l||(l=q),t.size!=e.size&&!p)return!1;var d=s.get(t);if(d)return d==e;n|=2,s.set(t,e);var b=Ct(l(t),l(e),n,i,o,s);return s.delete(t),b;case"[object Symbol]":if(gt)return gt.call(t)==gt.call(e)}return!1}(t,e,A,r,n,i,l);if(!(1&r)){var E=x&&G.call(t,"__wrapped__"),O=S&&G.call(e,"__wrapped__");if(E||O){var j=E?t.value():t,L=O?e.value():e;return l||(l=new mt),i(j,L,r,n,l)}}return!!C&&(l||(l=new mt),function(t,e,r,n,i,o){var s=1&r,a=Et(t),u=a.length;if(u!=Et(e).length&&!s)return!1;for(var c=u;c--;){var l=a[c];if(!(s?l in e:G.call(e,l)))return!1}var f=o.get(t);if(f&&o.get(e))return f==e;var h=!0;o.set(t,e),o.set(e,t);for(var p=s;++c<u;){var d=t[l=a[c]],g=e[l];if(n)var _=s?n(g,d,l,e,t,o):n(d,g,l,t,e,o);if(!(void 0===_?d===g||i(d,g,r,n,o):_)){h=!1;break}p||(p="constructor"==l)}if(h&&!p){var v=t.constructor,b=e.constructor;v==b||!("constructor"in t)||!("constructor"in e)||"function"==typeof v&&v instanceof v&&"function"==typeof b&&b instanceof b||(h=!1)}return o.delete(t),o.delete(e),h}(t,e,r,n,i,l))}(t,e,r,n,St,i))}function Ct(t,e,r,n,i,o){var s=1&r,a=t.length,u=e.length;if(a!=u&&!(s&&u>a))return!1;var c=o.get(t);if(c&&o.get(e))return c==e;var l=-1,f=!0,h=2&r?new yt:void 0;for(o.set(t,e),o.set(e,t);++l<a;){var p=t[l],d=e[l];if(n)var g=s?n(d,p,l,e,t,o):n(p,d,l,t,e,o);if(void 0!==g){if(g)continue;f=!1;break}if(h){if(!R(e,(function(t,e){if(s=e,!h.has(s)&&(p===t||i(p,t,r,n,o)))return h.push(e);var s}))){f=!1;break}}else if(p!==d&&!i(p,d,r,n,o)){f=!1;break}}return o.delete(t),o.delete(e),f}function Et(t){return function(t,e,r){var n=e(t);return qt(t)?n:function(t,e){for(var r=-1,n=e.length,i=t.length;++r<n;)t[i+r]=e[r];return t}(n,r(t))}(t,Ht,Lt)}function Ot(t,e){var r,n,i=t.__data__;return("string"==(n=typeof(r=e))||"number"==n||"symbol"==n||"boolean"==n?"__proto__"!==r:null===r)?i["string"==typeof e?"string":"hash"]:i.map}function jt(t,e){var r=function(t,e){return null==t?void 0:t[e]}(t,e);return function(t){return!(!Bt(t)||function(t){return!!$&&$ in t}(t))&&(Ft(t)?V:A).test(Tt(t))}(r)?r:void 0}_t.prototype.clear=function(){this.__data__=ut?ut(null):{},this.size=0},_t.prototype.delete=function(t){var e=this.has(t)&&delete this.__data__[t];return this.size-=e?1:0,e},_t.prototype.get=function(t){var e=this.__data__;if(ut){var r=e[t];return r===n?void 0:r}return G.call(e,t)?e[t]:void 0},_t.prototype.has=function(t){var e=this.__data__;return ut?void 0!==e[t]:G.call(e,t)},_t.prototype.set=function(t,e){var r=this.__data__;return this.size+=this.has(t)?0:1,r[t]=ut&&void 0===e?n:e,this},vt.prototype.clear=function(){this.__data__=[],this.size=0},vt.prototype.delete=function(t){var e=this.__data__,r=At(e,t);return!(r<0||(r==e.length-1?e.pop():K.call(e,r,1),--this.size,0))},vt.prototype.get=function(t){var e=this.__data__,r=At(e,t);return r<0?void 0:e[r][1]},vt.prototype.has=function(t){return At(this.__data__,t)>-1},vt.prototype.set=function(t,e){var r=this.__data__,n=At(r,t);return n<0?(++this.size,r.push([t,e])):r[n][1]=e,this},bt.prototype.clear=function(){this.size=0,this.__data__={hash:new _t,map:new(it||vt),string:new _t}},bt.prototype.delete=function(t){var e=Ot(this,t).delete(t);return this.size-=e?1:0,e},bt.prototype.get=function(t){return Ot(this,t).get(t)},bt.prototype.has=function(t){return Ot(this,t).has(t)},bt.prototype.set=function(t,e){var r=Ot(this,t),n=r.size;return r.set(t,e),this.size+=r.size==n?0:1,this},yt.prototype.add=yt.prototype.push=function(t){return this.__data__.set(t,n),this},yt.prototype.has=function(t){return this.__data__.has(t)},mt.prototype.clear=function(){this.__data__=new vt,this.size=0},mt.prototype.delete=function(t){var e=this.__data__,r=e.delete(t);return this.size=e.size,r},mt.prototype.get=function(t){return this.__data__.get(t)},mt.prototype.has=function(t){return this.__data__.has(t)},mt.prototype.set=function(t,e){var r=this.__data__;if(r instanceof vt){var n=r.__data__;if(!it||n.length<199)return n.push([t,e]),this.size=++r.size,this;r=this.__data__=new bt(n)}return r.set(t,e),this.size=r.size,this};var Lt=tt?function(t){return null==t?[]:(t=Object(t),function(e,r){for(var n=-1,i=null==e?0:e.length,o=0,s=[];++n<i;){var a=e[n];u=a,Y.call(t,u)&&(s[o++]=a)}var u;return s}(tt(t)))}:function(){return[]},kt=wt;function Mt(t,e){return!!(e=null==e?i:e)&&("number"==typeof t||w.test(t))&&t>-1&&t%1==0&&t<e}function Tt(t){if(null!=t){try{return U.call(t)}catch(t){}try{return t+""}catch(t){}}return""}function Rt(t,e){return t===e||t!=t&&e!=e}(nt&&kt(new nt(new ArrayBuffer(1)))!=m||it&&kt(new it)!=f||ot&&kt(ot.resolve())!=d||st&&kt(new st)!=_||at&&kt(new at)!=b)&&(kt=function(t){var e=wt(t),r=e==p?t.constructor:void 0,n=r?Tt(r):"";if(n)switch(n){case ct:return m;case lt:return f;case ft:return d;case ht:return _;case pt:return b}return e});var Nt=xt(function(){return arguments}())?xt:function(t){return Pt(t)&&G.call(t,"callee")&&!Y.call(t,"callee")},qt=Array.isArray,Dt=et||function(){return!1};function Ft(t){if(!Bt(t))return!1;var e=wt(t);return e==l||"[object GeneratorFunction]"==e||"[object AsyncFunction]"==e||"[object Proxy]"==e}function It(t){return"number"==typeof t&&t>-1&&t%1==0&&t<=i}function Bt(t){var e=typeof t;return null!=t&&("object"==e||"function"==e)}function Pt(t){return null!=t&&"object"==typeof t}var zt=T?function(t){return function(e){return t(e)}}(T):function(t){return Pt(t)&&It(t.length)&&!!x[wt(t)]};function Ht(t){return null!=(e=t)&&It(e.length)&&!Ft(e)?function(t,e){var r=qt(t),n=!r&&Nt(t),i=!r&&!n&&Dt(t),o=!r&&!n&&!i&&zt(t),s=r||n||i||o,a=s?function(t,e){for(var r=-1,n=Array(t);++r<t;)n[r]=e(r);return n}(t.length,String):[],u=a.length;for(var c in t)!e&&!G.call(t,c)||s&&("length"==c||i&&("offset"==c||"parent"==c)||o&&("buffer"==c||"byteLength"==c||"byteOffset"==c)||Mt(c,u))||a.push(c);return a}(t):function(t){if(r=(e=t)&&e.constructor,e!==("function"==typeof r&&r.prototype||z))return rt(t);var e,r,n=[];for(var i in Object(t))G.call(t,i)&&"constructor"!=i&&n.push(i);return n}(t);var e}t.exports=function(t,e){return St(t,e)}},210:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0});var i,o=n(r(465)),s=n(r(307));!function(t){t.compose=function(t,e,r){void 0===t&&(t={}),void 0===e&&(e={}),"object"!=typeof t&&(t={}),"object"!=typeof e&&(e={});var n=o.default(e);for(var i in r||(n=Object.keys(n).reduce((function(t,e){return null!=n[e]&&(t[e]=n[e]),t}),{})),t)void 0!==t[i]&&void 0===e[i]&&(n[i]=t[i]);return Object.keys(n).length>0?n:void 0},t.diff=function(t,e){void 0===t&&(t={}),void 0===e&&(e={}),"object"!=typeof t&&(t={}),"object"!=typeof e&&(e={});var r=Object.keys(t).concat(Object.keys(e)).reduce((function(r,n){return s.default(t[n],e[n])||(r[n]=void 0===e[n]?null:e[n]),r}),{});return Object.keys(r).length>0?r:void 0},t.invert=function(t,e){void 0===t&&(t={}),void 0===e&&(e={}),t=t||{};var r=Object.keys(e).reduce((function(r,n){return e[n]!==t[n]&&void 0!==t[n]&&(r[n]=e[n]),r}),{});return Object.keys(t).reduce((function(r,n){return t[n]!==e[n]&&void 0===e[n]&&(r[n]=null),r}),r)},t.transform=function(t,e,r){if(void 0===r&&(r=!1),"object"!=typeof t)return e;if("object"==typeof e){if(!r)return e;var n=Object.keys(e).reduce((function(r,n){return void 0===t[n]&&(r[n]=e[n]),r}),{});return Object.keys(n).length>0?n:void 0}}}(i||(i={})),e.default=i},895:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}},i=n(r(103)),o=n(r(465)),s=n(r(307)),a=n(r(210)),u=n(r(430)),c=String.fromCharCode(0),l=function(){function t(t){Array.isArray(t)?this.ops=t:null!=t&&Array.isArray(t.ops)?this.ops=t.ops:this.ops=[]}return t.prototype.insert=function(t,e){var r={};return"string"==typeof t&&0===t.length?this:(r.insert=t,null!=e&&"object"==typeof e&&Object.keys(e).length>0&&(r.attributes=e),this.push(r))},t.prototype.delete=function(t){return t<=0?this:this.push({delete:t})},t.prototype.retain=function(t,e){if(t<=0)return this;var r={retain:t};return null!=e&&"object"==typeof e&&Object.keys(e).length>0&&(r.attributes=e),this.push(r)},t.prototype.push=function(t){var e=this.ops.length,r=this.ops[e-1];if(t=o.default(t),"object"==typeof r){if("number"==typeof t.delete&&"number"==typeof r.delete)return this.ops[e-1]={delete:r.delete+t.delete},this;if("number"==typeof r.delete&&null!=t.insert&&(e-=1,"object"!=typeof(r=this.ops[e-1])))return this.ops.unshift(t),this;if(s.default(t.attributes,r.attributes)){if("string"==typeof t.insert&&"string"==typeof r.insert)return this.ops[e-1]={insert:r.insert+t.insert},"object"==typeof t.attributes&&(this.ops[e-1].attributes=t.attributes),this;if("number"==typeof t.retain&&"number"==typeof r.retain)return this.ops[e-1]={retain:r.retain+t.retain},"object"==typeof t.attributes&&(this.ops[e-1].attributes=t.attributes),this}}return e===this.ops.length?this.ops.push(t):this.ops.splice(e,0,t),this},t.prototype.chop=function(){var t=this.ops[this.ops.length-1];return t&&t.retain&&!t.attributes&&this.ops.pop(),this},t.prototype.filter=function(t){return this.ops.filter(t)},t.prototype.forEach=function(t){this.ops.forEach(t)},t.prototype.map=function(t){return this.ops.map(t)},t.prototype.partition=function(t){var e=[],r=[];return this.forEach((function(n){(t(n)?e:r).push(n)})),[e,r]},t.prototype.reduce=function(t,e){return this.ops.reduce(t,e)},t.prototype.changeLength=function(){return this.reduce((function(t,e){return e.insert?t+u.default.length(e):e.delete?t-e.delete:t}),0)},t.prototype.length=function(){return this.reduce((function(t,e){return t+u.default.length(e)}),0)},t.prototype.slice=function(e,r){void 0===e&&(e=0),void 0===r&&(r=1/0);for(var n=[],i=u.default.iterator(this.ops),o=0;o<r&&i.hasNext();){var s=void 0;o<e?s=i.next(e-o):(s=i.next(r-o),n.push(s)),o+=u.default.length(s)}return new t(n)},t.prototype.compose=function(e){var r=u.default.iterator(this.ops),n=u.default.iterator(e.ops),i=[],o=n.peek();if(null!=o&&"number"==typeof o.retain&&null==o.attributes){for(var c=o.retain;"insert"===r.peekType()&&r.peekLength()<=c;)c-=r.peekLength(),i.push(r.next());o.retain-c>0&&n.next(o.retain-c)}for(var l=new t(i);r.hasNext()||n.hasNext();)if("insert"===n.peekType())l.push(n.next());else if("delete"===r.peekType())l.push(r.next());else{var f=Math.min(r.peekLength(),n.peekLength()),h=r.next(f),p=n.next(f);if("number"==typeof p.retain){var d={};"number"==typeof h.retain?d.retain=f:d.insert=h.insert;var g=a.default.compose(h.attributes,p.attributes,"number"==typeof h.retain);if(g&&(d.attributes=g),l.push(d),!n.hasNext()&&s.default(l.ops[l.ops.length-1],d)){var _=new t(r.rest());return l.concat(_).chop()}}else"number"==typeof p.delete&&"number"==typeof h.retain&&l.push(p)}return l.chop()},t.prototype.concat=function(e){var r=new t(this.ops.slice());return e.ops.length>0&&(r.push(e.ops[0]),r.ops=r.ops.concat(e.ops.slice(1))),r},t.prototype.diff=function(e,r){if(this.ops===e.ops)return new t;var n=[this,e].map((function(t){return t.map((function(r){if(null!=r.insert)return"string"==typeof r.insert?r.insert:c;throw new Error("diff() called "+(t===e?"on":"with")+" non-document")})).join("")})),o=new t,l=i.default(n[0],n[1],r),f=u.default.iterator(this.ops),h=u.default.iterator(e.ops);return l.forEach((function(t){for(var e=t[1].length;e>0;){var r=0;switch(t[0]){case i.default.INSERT:r=Math.min(h.peekLength(),e),o.push(h.next(r));break;case i.default.DELETE:r=Math.min(e,f.peekLength()),f.next(r),o.delete(r);break;case i.default.EQUAL:r=Math.min(f.peekLength(),h.peekLength(),e);var n=f.next(r),u=h.next(r);s.default(n.insert,u.insert)?o.retain(r,a.default.diff(n.attributes,u.attributes)):o.push(u).delete(r)}e-=r}})),o.chop()},t.prototype.eachLine=function(e,r){void 0===r&&(r="\n");for(var n=u.default.iterator(this.ops),i=new t,o=0;n.hasNext();){if("insert"!==n.peekType())return;var s=n.peek(),a=u.default.length(s)-n.peekLength(),c="string"==typeof s.insert?s.insert.indexOf(r,a)-a:-1;if(c<0)i.push(n.next());else if(c>0)i.push(n.next(c));else{if(!1===e(i,n.next(1).attributes||{},o))return;o+=1,i=new t}}i.length()>0&&e(i,{},o)},t.prototype.invert=function(e){var r=new t;return this.reduce((function(t,n){if(n.insert)r.delete(u.default.length(n));else{if(n.retain&&null==n.attributes)return r.retain(n.retain),t+n.retain;if(n.delete||n.retain&&n.attributes){var i=n.delete||n.retain;return e.slice(t,t+i).forEach((function(t){n.delete?r.push(t):n.retain&&n.attributes&&r.retain(u.default.length(t),a.default.invert(n.attributes,t.attributes))})),t+i}}return t}),0),r.chop()},t.prototype.transform=function(e,r){if(void 0===r&&(r=!1),r=!!r,"number"==typeof e)return this.transformPosition(e,r);for(var n=e,i=u.default.iterator(this.ops),o=u.default.iterator(n.ops),s=new t;i.hasNext()||o.hasNext();)if("insert"!==i.peekType()||!r&&"insert"===o.peekType())if("insert"===o.peekType())s.push(o.next());else{var c=Math.min(i.peekLength(),o.peekLength()),l=i.next(c),f=o.next(c);if(l.delete)continue;f.delete?s.push(f):s.retain(c,a.default.transform(l.attributes,f.attributes,r))}else s.retain(u.default.length(i.next()));return s.chop()},t.prototype.transformPosition=function(t,e){void 0===e&&(e=!1),e=!!e;for(var r=u.default.iterator(this.ops),n=0;r.hasNext()&&n<=t;){var i=r.peekLength(),o=r.peekType();r.next(),"delete"!==o?("insert"===o&&(n<t||!e)&&(t+=i),n+=i):t-=Math.min(i,t-n)}return t},t.Op=u.default,t.AttributeMap=a.default,t}();t.exports=l},977:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0});var i=n(r(430)),o=function(){function t(t){this.ops=t,this.index=0,this.offset=0}return t.prototype.hasNext=function(){return this.peekLength()<1/0},t.prototype.next=function(t){t||(t=1/0);var e=this.ops[this.index];if(e){var r=this.offset,n=i.default.length(e);if(t>=n-r?(t=n-r,this.index+=1,this.offset=0):this.offset+=t,"number"==typeof e.delete)return{delete:t};var o={};return e.attributes&&(o.attributes=e.attributes),"number"==typeof e.retain?o.retain=t:"string"==typeof e.insert?o.insert=e.insert.substr(r,t):o.insert=e.insert,o}return{retain:1/0}},t.prototype.peek=function(){return this.ops[this.index]},t.prototype.peekLength=function(){return this.ops[this.index]?i.default.length(this.ops[this.index])-this.offset:1/0},t.prototype.peekType=function(){return this.ops[this.index]?"number"==typeof this.ops[this.index].delete?"delete":"number"==typeof this.ops[this.index].retain?"retain":"insert":"retain"},t.prototype.rest=function(){if(this.hasNext()){if(0===this.offset)return this.ops.slice(this.index);var t=this.offset,e=this.index,r=this.next(),n=this.ops.slice(this.index);return this.offset=t,this.index=e,[r].concat(n)}return[]},t}();e.default=o},430:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0});var i,o=n(r(977));!function(t){t.iterator=function(t){return new o.default(t)},t.length=function(t){return"number"==typeof t.delete?t.delete:"number"==typeof t.retain?t.retain:"string"==typeof t.insert?t.insert.length:1}}(i||(i={})),e.default=i},103:t=>{var e=-1;function r(t,a,u,c){if(t===a)return t?[[0,t]]:[];if(null!=u){var l=function(t,e,r){var n="number"==typeof r?{index:r,length:0}:r.oldRange,i="number"==typeof r?null:r.newRange,o=t.length,s=e.length;if(0===n.length&&(null===i||0===i.length)){var a=n.index,u=t.slice(0,a),c=t.slice(a),l=i?i.index:null,h=a+s-o;if((null===l||l===h)&&!(h<0||h>s)){var p=e.slice(0,h);if((_=e.slice(h))===c){var d=Math.min(a,h);if((b=u.slice(0,d))===(m=p.slice(0,d)))return f(b,u.slice(d),p.slice(d),c)}}if(null===l||l===a){var g=a,_=(p=e.slice(0,g),e.slice(g));if(p===u){var v=Math.min(o-g,s-g);if((y=c.slice(c.length-v))===(A=_.slice(_.length-v)))return f(u,c.slice(0,c.length-v),_.slice(0,_.length-v),y)}}}if(n.length>0&&i&&0===i.length){var b=t.slice(0,n.index),y=t.slice(n.index+n.length);if(!(s<(d=b.length)+(v=y.length))){var m=e.slice(0,d),A=e.slice(s-v);if(b===m&&y===A)return f(b,t.slice(d,o-v),e.slice(d,s-v),y)}}return null}(t,a,u);if(l)return l}var h=i(t,a),p=t.substring(0,h);h=o(t=t.substring(h),a=a.substring(h));var d=t.substring(t.length-h),g=function(t,s){var a;if(!t)return[[1,s]];if(!s)return[[e,t]];var u=t.length>s.length?t:s,c=t.length>s.length?s:t,l=u.indexOf(c);if(-1!==l)return a=[[1,u.substring(0,l)],[0,c],[1,u.substring(l+c.length)]],t.length>s.length&&(a[0][0]=a[2][0]=e),a;if(1===c.length)return[[e,t],[1,s]];var f=function(t,e){var r=t.length>e.length?t:e,n=t.length>e.length?e:t;if(r.length<4||2*n.length<r.length)return null;function s(t,e,r){for(var n,s,a,u,c=t.substring(r,r+Math.floor(t.length/4)),l=-1,f="";-1!==(l=e.indexOf(c,l+1));){var h=i(t.substring(r),e.substring(l)),p=o(t.substring(0,r),e.substring(0,l));f.length<p+h&&(f=e.substring(l-p,l)+e.substring(l,l+h),n=t.substring(0,r-p),s=t.substring(r+h),a=e.substring(0,l-p),u=e.substring(l+h))}return 2*f.length>=t.length?[n,s,a,u,f]:null}var a,u,c,l,f,h=s(r,n,Math.ceil(r.length/4)),p=s(r,n,Math.ceil(r.length/2));return h||p?(a=p?h&&h[4].length>p[4].length?h:p:h,t.length>e.length?(u=a[0],c=a[1],l=a[2],f=a[3]):(l=a[0],f=a[1],u=a[2],c=a[3]),[u,c,l,f,a[4]]):null}(t,s);if(f){var h=f[0],p=f[1],d=f[2],g=f[3],_=f[4],v=r(h,d),b=r(p,g);return v.concat([[0,_]],b)}return function(t,r){for(var i=t.length,o=r.length,s=Math.ceil((i+o)/2),a=s,u=2*s,c=new Array(u),l=new Array(u),f=0;f<u;f++)c[f]=-1,l[f]=-1;c[a+1]=0,l[a+1]=0;for(var h=i-o,p=h%2!=0,d=0,g=0,_=0,v=0,b=0;b<s;b++){for(var y=-b+d;y<=b-g;y+=2){for(var m=a+y,A=(E=y===-b||y!==b&&c[m-1]<c[m+1]?c[m+1]:c[m-1]+1)-y;E<i&&A<o&&t.charAt(E)===r.charAt(A);)E++,A++;if(c[m]=E,E>i)g+=2;else if(A>o)d+=2;else if(p&&(S=a+h-y)>=0&&S<u&&-1!==l[S]&&E>=(x=i-l[S]))return n(t,r,E,A)}for(var w=-b+_;w<=b-v;w+=2){for(var x,S=a+w,C=(x=w===-b||w!==b&&l[S-1]<l[S+1]?l[S+1]:l[S-1]+1)-w;x<i&&C<o&&t.charAt(i-x-1)===r.charAt(o-C-1);)x++,C++;if(l[S]=x,x>i)v+=2;else if(C>o)_+=2;else if(!p){var E;if((m=a+h-w)>=0&&m<u&&-1!==c[m])if(A=a+(E=c[m])-m,E>=(x=i-x))return n(t,r,E,A)}}}return[[e,t],[1,r]]}(t,s)}(t=t.substring(0,t.length-h),a=a.substring(0,a.length-h));return p&&g.unshift([0,p]),d&&g.push([0,d]),s(g,c),g}function n(t,e,n,i){var o=t.substring(0,n),s=e.substring(0,i),a=t.substring(n),u=e.substring(i),c=r(o,s),l=r(a,u);return c.concat(l)}function i(t,e){if(!t||!e||t.charAt(0)!==e.charAt(0))return 0;for(var r=0,n=Math.min(t.length,e.length),i=n,o=0;r<i;)t.substring(o,i)==e.substring(o,i)?o=r=i:n=i,i=Math.floor((n-r)/2+r);return a(t.charCodeAt(i-1))&&i--,i}function o(t,e){if(!t||!e||t.slice(-1)!==e.slice(-1))return 0;for(var r=0,n=Math.min(t.length,e.length),i=n,o=0;r<i;)t.substring(t.length-i,t.length-o)==e.substring(e.length-i,e.length-o)?o=r=i:n=i,i=Math.floor((n-r)/2+r);return u(t.charCodeAt(t.length-i))&&i--,i}function s(t,r){t.push([0,""]);for(var n,a=0,u=0,f=0,h="",p="";a<t.length;)if(a<t.length-1&&!t[a][1])t.splice(a,1);else switch(t[a][0]){case 1:f++,p+=t[a][1],a++;break;case e:u++,h+=t[a][1],a++;break;case 0:var d=a-f-u-1;if(r){if(d>=0&&l(t[d][1])){var g=t[d][1].slice(-1);if(t[d][1]=t[d][1].slice(0,-1),h=g+h,p=g+p,!t[d][1]){t.splice(d,1),a--;var _=d-1;t[_]&&1===t[_][0]&&(f++,p=t[_][1]+p,_--),t[_]&&t[_][0]===e&&(u++,h=t[_][1]+h,_--),d=_}}c(t[a][1])&&(g=t[a][1].charAt(0),t[a][1]=t[a][1].slice(1),h+=g,p+=g)}if(a<t.length-1&&!t[a][1]){t.splice(a,1);break}if(h.length>0||p.length>0){h.length>0&&p.length>0&&(0!==(n=i(p,h))&&(d>=0?t[d][1]+=p.substring(0,n):(t.splice(0,0,[0,p.substring(0,n)]),a++),p=p.substring(n),h=h.substring(n)),0!==(n=o(p,h))&&(t[a][1]=p.substring(p.length-n)+t[a][1],p=p.substring(0,p.length-n),h=h.substring(0,h.length-n)));var v=f+u;0===h.length&&0===p.length?(t.splice(a-v,v),a-=v):0===h.length?(t.splice(a-v,v,[1,p]),a=a-v+1):0===p.length?(t.splice(a-v,v,[e,h]),a=a-v+1):(t.splice(a-v,v,[e,h],[1,p]),a=a-v+2)}0!==a&&0===t[a-1][0]?(t[a-1][1]+=t[a][1],t.splice(a,1)):a++,f=0,u=0,h="",p=""}""===t[t.length-1][1]&&t.pop();var b=!1;for(a=1;a<t.length-1;)0===t[a-1][0]&&0===t[a+1][0]&&(t[a][1].substring(t[a][1].length-t[a-1][1].length)===t[a-1][1]?(t[a][1]=t[a-1][1]+t[a][1].substring(0,t[a][1].length-t[a-1][1].length),t[a+1][1]=t[a-1][1]+t[a+1][1],t.splice(a-1,1),b=!0):t[a][1].substring(0,t[a+1][1].length)==t[a+1][1]&&(t[a-1][1]+=t[a+1][1],t[a][1]=t[a][1].substring(t[a+1][1].length)+t[a+1][1],t.splice(a+1,1),b=!0)),a++;b&&s(t,r)}function a(t){return t>=55296&&t<=56319}function u(t){return t>=56320&&t<=57343}function c(t){return u(t.charCodeAt(0))}function l(t){return a(t.charCodeAt(t.length-1))}function f(t,r,n,i){return l(t)||c(i)?null:function(t){for(var e=[],r=0;r<t.length;r++)t[r][1].length>0&&e.push(t[r]);return e}([[0,t],[e,r],[1,n],[0,i]])}function h(t,e,n){return r(t,e,n,!0)}h.INSERT=1,h.DELETE=e,h.EQUAL=0,t.exports=h},165:function(t,e,r){var n,i;void 0===(i="function"==typeof(n=function(){var t,e={};function r(t,e,r){var n=t.getClientRects();if(2===n.length){var i=t.getBoundingClientRect();return n[e][r]<i[r]}return!1}function n(t){if(!t)return t;if(screen.deviceXDPI===screen.logicalXDPI)return t;if("length"in t)return Array.prototype.map.call(t,n);var e=screen.deviceXDPI/screen.logicalXDPI;return{top:t.top/e,bottom:t.bottom/e,left:t.left/e,right:t.right/e,width:t.width/e,height:t.height/e}}function i(t,e){var r,n=0,i=1024;if(i>=e.length)return Array.prototype.push.apply(t,e);for(;n<e.length;)r=Array.prototype.push.apply(t,Array.prototype.slice.call(e,n,n+i)),n+=i;return r}return e.isBroken=function(){if(void 0===t){var e=document.createElement("p"),n=document.createElement("span"),i=document.createTextNode("aa"),o=document.createTextNode("aa"),s=document.createElement("img");s.setAttribute("src","data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=");var a=document.createRange();if(t={},e.appendChild(i),e.appendChild(n),n.appendChild(s),n.appendChild(o),document.body.appendChild(e),a.setStart(i,1),a.setEnd(n,0),t.getClientRects=t.getBoundingClientRect=a.getClientRects().length>1,t.getClientRects||(a.setEnd(o,1),t.getClientRects=t.getBoundingClientRect=2===a.getClientRects().length),!t.getBoundingClientRect){a.setEnd(a.startContainer,a.startOffset);var u=a.getBoundingClientRect();t.getBoundingClientRect=0===u.top&&0===u.left}if(document.body.removeChild(e),!t.getBoundingClientRect){var c=document.createElement("p");c.style.width="0px",c.style.fontSize="20px",c.style.whiteSpace="normal",c.style.wordBreak="normal";var l=document.createTextNode("m mm");c.appendChild(l),document.body.appendChild(c),a.setStart(l,1),a.setEnd(l,2),r(a,1,"left")?t.getBoundingClientRect=!0:(a.setStart(l,1),a.setEnd(l,3),r(a,0,"top")&&(t.getBoundingClientRect=!0)),document.body.removeChild(c)}var f=window.ActiveXObject&&new Function("/*@cc_on return @_jscript_version; @*/")();t.ieZoom=!!f&&f<=10}return t},e.getClientRects=function(t){var e=this.isBroken();if(e.ieZoom)return n(t.getClientRects());if(!e.getClientRects)return t.getClientRects();var r=[],o=[],s=t.endContainer,a=t.endOffset,u=document.createRange();function c(t){for(var e=0;t=t.previousSibling;)e++;return e}for(;s!==t.commonAncestorContainer;)u.setStart(s,0),u.setEnd(s,a),i(o,u.getClientRects()),a=c(s),s=s.parentNode;return(u=t.cloneRange()).setEnd(s,a),i(r,u.getClientRects()),i(r,o),r},e.getBoundingClientRect=function(t){var e=this.getClientRects(t);if(0===e.length)return null;var r,i=t.getBoundingClientRect(),o=this.isBroken();if(o.ieZoom)return n(i);if(!o.getBoundingClientRect)return i;if(0===i.width&&0===i.height)return e[0];for(var s=0,a=e.length;s<a;s++){var u=e[s];r?(r.left=Math.min(r.left,u.left),r.top=Math.min(r.top,u.top),r.right=Math.max(r.right,u.right),r.bottom=Math.max(r.bottom,u.bottom)):r={left:u.left,top:u.top,right:u.right,bottom:u.bottom}}return r&&(r.width=r.right-r.left,r.height=r.bottom-r.top),r},e})?n.call(e,r,e,t):n)||(t.exports=i)},33:(t,e,r)=>{"use strict";r.r(e),r.d(e,{default:()=>x});var n=function(){if("undefined"!=typeof Map)return Map;function t(t,e){var r=-1;return t.some((function(t,n){return t[0]===e&&(r=n,!0)})),r}return function(){function e(){this.__entries__=[]}return Object.defineProperty(e.prototype,"size",{get:function(){return this.__entries__.length},enumerable:!0,configurable:!0}),e.prototype.get=function(e){var r=t(this.__entries__,e),n=this.__entries__[r];return n&&n[1]},e.prototype.set=function(e,r){var n=t(this.__entries__,e);~n?this.__entries__[n][1]=r:this.__entries__.push([e,r])},e.prototype.delete=function(e){var r=this.__entries__,n=t(r,e);~n&&r.splice(n,1)},e.prototype.has=function(e){return!!~t(this.__entries__,e)},e.prototype.clear=function(){this.__entries__.splice(0)},e.prototype.forEach=function(t,e){void 0===e&&(e=null);for(var r=0,n=this.__entries__;r<n.length;r++){var i=n[r];t.call(e,i[1],i[0])}},e}()}(),i="undefined"!=typeof window&&"undefined"!=typeof document&&window.document===document,o=void 0!==r.g&&r.g.Math===Math?r.g:"undefined"!=typeof self&&self.Math===Math?self:"undefined"!=typeof window&&window.Math===Math?window:Function("return this")(),s="function"==typeof requestAnimationFrame?requestAnimationFrame.bind(o):function(t){return setTimeout((function(){return t(Date.now())}),1e3/60)},a=["top","right","bottom","left","width","height","size","weight"],u="undefined"!=typeof MutationObserver,c=function(){function t(){this.connected_=!1,this.mutationEventsAdded_=!1,this.mutationsObserver_=null,this.observers_=[],this.onTransitionEnd_=this.onTransitionEnd_.bind(this),this.refresh=function(t,e){var r=!1,n=!1,i=0;function o(){r&&(r=!1,t()),n&&u()}function a(){s(o)}function u(){var t=Date.now();if(r){if(t-i<2)return;n=!0}else r=!0,n=!1,setTimeout(a,20);i=t}return u}(this.refresh.bind(this))}return t.prototype.addObserver=function(t){~this.observers_.indexOf(t)||this.observers_.push(t),this.connected_||this.connect_()},t.prototype.removeObserver=function(t){var e=this.observers_,r=e.indexOf(t);~r&&e.splice(r,1),!e.length&&this.connected_&&this.disconnect_()},t.prototype.refresh=function(){this.updateObservers_()&&this.refresh()},t.prototype.updateObservers_=function(){var t=this.observers_.filter((function(t){return t.gatherActive(),t.hasActive()}));return t.forEach((function(t){return t.broadcastActive()})),t.length>0},t.prototype.connect_=function(){i&&!this.connected_&&(document.addEventListener("transitionend",this.onTransitionEnd_),window.addEventListener("resize",this.refresh),u?(this.mutationsObserver_=new MutationObserver(this.refresh),this.mutationsObserver_.observe(document,{attributes:!0,childList:!0,characterData:!0,subtree:!0})):(document.addEventListener("DOMSubtreeModified",this.refresh),this.mutationEventsAdded_=!0),this.connected_=!0)},t.prototype.disconnect_=function(){i&&this.connected_&&(document.removeEventListener("transitionend",this.onTransitionEnd_),window.removeEventListener("resize",this.refresh),this.mutationsObserver_&&this.mutationsObserver_.disconnect(),this.mutationEventsAdded_&&document.removeEventListener("DOMSubtreeModified",this.refresh),this.mutationsObserver_=null,this.mutationEventsAdded_=!1,this.connected_=!1)},t.prototype.onTransitionEnd_=function(t){var e=t.propertyName,r=void 0===e?"":e;a.some((function(t){return!!~r.indexOf(t)}))&&this.refresh()},t.getInstance=function(){return this.instance_||(this.instance_=new t),this.instance_},t.instance_=null,t}(),l=function(t,e){for(var r=0,n=Object.keys(e);r<n.length;r++){var i=n[r];Object.defineProperty(t,i,{value:e[i],enumerable:!1,writable:!1,configurable:!0})}return t},f=function(t){return t&&t.ownerDocument&&t.ownerDocument.defaultView||o},h=v(0,0,0,0);function p(t){return parseFloat(t)||0}function d(t){for(var e=[],r=1;r<arguments.length;r++)e[r-1]=arguments[r];return e.reduce((function(e,r){return e+p(t["border-"+r+"-width"])}),0)}var g="undefined"!=typeof SVGGraphicsElement?function(t){return t instanceof f(t).SVGGraphicsElement}:function(t){return t instanceof f(t).SVGElement&&"function"==typeof t.getBBox};function _(t){return i?g(t)?function(t){var e=t.getBBox();return v(0,0,e.width,e.height)}(t):function(t){var e=t.clientWidth,r=t.clientHeight;if(!e&&!r)return h;var n=f(t).getComputedStyle(t),i=function(t){for(var e={},r=0,n=["top","right","bottom","left"];r<n.length;r++){var i=n[r],o=t["padding-"+i];e[i]=p(o)}return e}(n),o=i.left+i.right,s=i.top+i.bottom,a=p(n.width),u=p(n.height);if("border-box"===n.boxSizing&&(Math.round(a+o)!==e&&(a-=d(n,"left","right")+o),Math.round(u+s)!==r&&(u-=d(n,"top","bottom")+s)),!function(t){return t===f(t).document.documentElement}(t)){var c=Math.round(a+o)-e,l=Math.round(u+s)-r;1!==Math.abs(c)&&(a-=c),1!==Math.abs(l)&&(u-=l)}return v(i.left,i.top,a,u)}(t):h}function v(t,e,r,n){return{x:t,y:e,width:r,height:n}}var b=function(){function t(t){this.broadcastWidth=0,this.broadcastHeight=0,this.contentRect_=v(0,0,0,0),this.target=t}return t.prototype.isActive=function(){var t=_(this.target);return this.contentRect_=t,t.width!==this.broadcastWidth||t.height!==this.broadcastHeight},t.prototype.broadcastRect=function(){var t=this.contentRect_;return this.broadcastWidth=t.width,this.broadcastHeight=t.height,t},t}(),y=function(t,e){var r,n,i,o,s,a,u,c=(n=(r=e).x,i=r.y,o=r.width,s=r.height,a="undefined"!=typeof DOMRectReadOnly?DOMRectReadOnly:Object,u=Object.create(a.prototype),l(u,{x:n,y:i,width:o,height:s,top:i,right:n+o,bottom:s+i,left:n}),u);l(this,{target:t,contentRect:c})},m=function(){function t(t,e,r){if(this.activeObservations_=[],this.observations_=new n,"function"!=typeof t)throw new TypeError("The callback provided as parameter 1 is not a function.");this.callback_=t,this.controller_=e,this.callbackCtx_=r}return t.prototype.observe=function(t){if(!arguments.length)throw new TypeError("1 argument required, but only 0 present.");if("undefined"!=typeof Element&&Element instanceof Object){if(!(t instanceof f(t).Element))throw new TypeError('parameter 1 is not of type "Element".');var e=this.observations_;e.has(t)||(e.set(t,new b(t)),this.controller_.addObserver(this),this.controller_.refresh())}},t.prototype.unobserve=function(t){if(!arguments.length)throw new TypeError("1 argument required, but only 0 present.");if("undefined"!=typeof Element&&Element instanceof Object){if(!(t instanceof f(t).Element))throw new TypeError('parameter 1 is not of type "Element".');var e=this.observations_;e.has(t)&&(e.delete(t),e.size||this.controller_.removeObserver(this))}},t.prototype.disconnect=function(){this.clearActive(),this.observations_.clear(),this.controller_.removeObserver(this)},t.prototype.gatherActive=function(){var t=this;this.clearActive(),this.observations_.forEach((function(e){e.isActive()&&t.activeObservations_.push(e)}))},t.prototype.broadcastActive=function(){if(this.hasActive()){var t=this.callbackCtx_,e=this.activeObservations_.map((function(t){return new y(t.target,t.broadcastRect())}));this.callback_.call(t,e,t),this.clearActive()}},t.prototype.clearActive=function(){this.activeObservations_.splice(0)},t.prototype.hasActive=function(){return this.activeObservations_.length>0},t}(),A="undefined"!=typeof WeakMap?new WeakMap:new n,w=function t(e){if(!(this instanceof t))throw new TypeError("Cannot call a class as a function.");if(!arguments.length)throw new TypeError("1 argument required, but only 0 present.");var r=c.getInstance(),n=new m(e,r,this);A.set(this,n)};["observe","unobserve","disconnect"].forEach((function(t){w.prototype[t]=function(){var e;return(e=A.get(this))[t].apply(e,arguments)}}));const x=void 0!==o.ResizeObserver?o.ResizeObserver:w},413:(t,e,r)=>{"use strict";r.r(e),r.d(e,{default:()=>v});var n=r(379),i=r.n(n),o=r(795),s=r.n(o),a=r(569),u=r.n(a),c=r(565),l=r.n(c),f=r(216),h=r.n(f),p=r(589),d=r.n(p),g=r(582),_={};_.styleTagTransform=d(),_.setAttributes=l(),_.insert=u().bind(null,"head"),_.domAPI=s(),_.insertStyleElement=h(),i()(g.Z,_);const v=g.Z&&g.Z.locals?g.Z.locals:void 0},379:t=>{"use strict";var e=[];function r(t){for(var r=-1,n=0;n<e.length;n++)if(e[n].identifier===t){r=n;break}return r}function n(t,n){for(var o={},s=[],a=0;a<t.length;a++){var u=t[a],c=n.base?u[0]+n.base:u[0],l=o[c]||0,f="".concat(c," ").concat(l);o[c]=l+1;var h=r(f),p={css:u[1],media:u[2],sourceMap:u[3],supports:u[4],layer:u[5]};if(-1!==h)e[h].references++,e[h].updater(p);else{var d=i(p,n);n.byIndex=a,e.splice(a,0,{identifier:f,updater:d,references:1})}s.push(f)}return s}function i(t,e){var r=e.domAPI(e);return r.update(t),function(e){if(e){if(e.css===t.css&&e.media===t.media&&e.sourceMap===t.sourceMap&&e.supports===t.supports&&e.layer===t.layer)return;r.update(t=e)}else r.remove()}}t.exports=function(t,i){var o=n(t=t||[],i=i||{});return function(t){t=t||[];for(var s=0;s<o.length;s++){var a=r(o[s]);e[a].references--}for(var u=n(t,i),c=0;c<o.length;c++){var l=r(o[c]);0===e[l].references&&(e[l].updater(),e.splice(l,1))}o=u}}},569:t=>{"use strict";var e={};t.exports=function(t,r){var n=function(t){if(void 0===e[t]){var r=document.querySelector(t);if(window.HTMLIFrameElement&&r instanceof window.HTMLIFrameElement)try{r=r.contentDocument.head}catch(t){r=null}e[t]=r}return e[t]}(t);if(!n)throw new Error("Couldn't find a style target. This probably means that the value for the 'insert' parameter is invalid.");n.appendChild(r)}},216:t=>{"use strict";t.exports=function(t){var e=document.createElement("style");return t.setAttributes(e,t.attributes),t.insert(e,t.options),e}},565:(t,e,r)=>{"use strict";t.exports=function(t){var e=r.nc;e&&t.setAttribute("nonce",e)}},795:t=>{"use strict";t.exports=function(t){var e=t.insertStyleElement(t);return{update:function(r){!function(t,e,r){var n="";r.supports&&(n+="@supports (".concat(r.supports,") {")),r.media&&(n+="@media ".concat(r.media," {"));var i=void 0!==r.layer;i&&(n+="@layer".concat(r.layer.length>0?" ".concat(r.layer):""," {")),n+=r.css,i&&(n+="}"),r.media&&(n+="}"),r.supports&&(n+="}");var o=r.sourceMap;o&&"undefined"!=typeof btoa&&(n+="\n/*# sourceMappingURL=data:application/json;base64,".concat(btoa(unescape(encodeURIComponent(JSON.stringify(o))))," */")),e.styleTagTransform(n,t,e.options)}(e,t,r)},remove:function(){!function(t){if(null===t.parentNode)return!1;t.parentNode.removeChild(t)}(e)}}}},589:t=>{"use strict";t.exports=function(t,e){if(e.styleSheet)e.styleSheet.cssText=t;else{for(;e.firstChild;)e.removeChild(e.firstChild);e.appendChild(document.createTextNode(t))}}},621:(t,e,r)=>{var n;!function(i){var o=/^\s+/,s=/\s+$/,a=0,u=i.round,c=i.min,l=i.max,f=i.random;function h(t,e){if(e=e||{},(t=t||"")instanceof h)return t;if(!(this instanceof h))return new h(t,e);var r=function(t){var e,r,n,a={r:0,g:0,b:0},u=1,f=null,h=null,p=null,d=!1,g=!1;return"string"==typeof t&&(t=function(t){t=t.replace(o,"").replace(s,"").toLowerCase();var e,r=!1;if(k[t])t=k[t],r=!0;else if("transparent"==t)return{r:0,g:0,b:0,a:0,format:"name"};return(e=U.rgb.exec(t))?{r:e[1],g:e[2],b:e[3]}:(e=U.rgba.exec(t))?{r:e[1],g:e[2],b:e[3],a:e[4]}:(e=U.hsl.exec(t))?{h:e[1],s:e[2],l:e[3]}:(e=U.hsla.exec(t))?{h:e[1],s:e[2],l:e[3],a:e[4]}:(e=U.hsv.exec(t))?{h:e[1],s:e[2],v:e[3]}:(e=U.hsva.exec(t))?{h:e[1],s:e[2],v:e[3],a:e[4]}:(e=U.hex8.exec(t))?{r:q(e[1]),g:q(e[2]),b:q(e[3]),a:B(e[4]),format:r?"name":"hex8"}:(e=U.hex6.exec(t))?{r:q(e[1]),g:q(e[2]),b:q(e[3]),format:r?"name":"hex"}:(e=U.hex4.exec(t))?{r:q(e[1]+""+e[1]),g:q(e[2]+""+e[2]),b:q(e[3]+""+e[3]),a:B(e[4]+""+e[4]),format:r?"name":"hex8"}:!!(e=U.hex3.exec(t))&&{r:q(e[1]+""+e[1]),g:q(e[2]+""+e[2]),b:q(e[3]+""+e[3]),format:r?"name":"hex"}}(t)),"object"==typeof t&&(G(t.r)&&G(t.g)&&G(t.b)?(e=t.r,r=t.g,n=t.b,a={r:255*R(e,255),g:255*R(r,255),b:255*R(n,255)},d=!0,g="%"===String(t.r).substr(-1)?"prgb":"rgb"):G(t.h)&&G(t.s)&&G(t.v)?(f=F(t.s),h=F(t.v),a=function(t,e,r){t=6*R(t,360),e=R(e,100),r=R(r,100);var n=i.floor(t),o=t-n,s=r*(1-e),a=r*(1-o*e),u=r*(1-(1-o)*e),c=n%6;return{r:255*[r,a,s,s,u,r][c],g:255*[u,r,r,a,s,s][c],b:255*[s,s,u,r,r,a][c]}}(t.h,f,h),d=!0,g="hsv"):G(t.h)&&G(t.s)&&G(t.l)&&(f=F(t.s),p=F(t.l),a=function(t,e,r){var n,i,o;function s(t,e,r){return r<0&&(r+=1),r>1&&(r-=1),r<1/6?t+6*(e-t)*r:r<.5?e:r<2/3?t+(e-t)*(2/3-r)*6:t}if(t=R(t,360),e=R(e,100),r=R(r,100),0===e)n=i=o=r;else{var a=r<.5?r*(1+e):r+e-r*e,u=2*r-a;n=s(u,a,t+1/3),i=s(u,a,t),o=s(u,a,t-1/3)}return{r:255*n,g:255*i,b:255*o}}(t.h,f,p),d=!0,g="hsl"),t.hasOwnProperty("a")&&(u=t.a)),u=T(u),{ok:d,format:t.format||g,r:c(255,l(a.r,0)),g:c(255,l(a.g,0)),b:c(255,l(a.b,0)),a:u}}(t);this._originalInput=t,this._r=r.r,this._g=r.g,this._b=r.b,this._a=r.a,this._roundA=u(100*this._a)/100,this._format=e.format||r.format,this._gradientType=e.gradientType,this._r<1&&(this._r=u(this._r)),this._g<1&&(this._g=u(this._g)),this._b<1&&(this._b=u(this._b)),this._ok=r.ok,this._tc_id=a++}function p(t,e,r){t=R(t,255),e=R(e,255),r=R(r,255);var n,i,o=l(t,e,r),s=c(t,e,r),a=(o+s)/2;if(o==s)n=i=0;else{var u=o-s;switch(i=a>.5?u/(2-o-s):u/(o+s),o){case t:n=(e-r)/u+(e<r?6:0);break;case e:n=(r-t)/u+2;break;case r:n=(t-e)/u+4}n/=6}return{h:n,s:i,l:a}}function d(t,e,r){t=R(t,255),e=R(e,255),r=R(r,255);var n,i,o=l(t,e,r),s=c(t,e,r),a=o,u=o-s;if(i=0===o?0:u/o,o==s)n=0;else{switch(o){case t:n=(e-r)/u+(e<r?6:0);break;case e:n=(r-t)/u+2;break;case r:n=(t-e)/u+4}n/=6}return{h:n,s:i,v:a}}function g(t,e,r,n){var i=[D(u(t).toString(16)),D(u(e).toString(16)),D(u(r).toString(16))];return n&&i[0].charAt(0)==i[0].charAt(1)&&i[1].charAt(0)==i[1].charAt(1)&&i[2].charAt(0)==i[2].charAt(1)?i[0].charAt(0)+i[1].charAt(0)+i[2].charAt(0):i.join("")}function _(t,e,r,n){return[D(I(n)),D(u(t).toString(16)),D(u(e).toString(16)),D(u(r).toString(16))].join("")}function v(t,e){e=0===e?0:e||10;var r=h(t).toHsl();return r.s-=e/100,r.s=N(r.s),h(r)}function b(t,e){e=0===e?0:e||10;var r=h(t).toHsl();return r.s+=e/100,r.s=N(r.s),h(r)}function y(t){return h(t).desaturate(100)}function m(t,e){e=0===e?0:e||10;var r=h(t).toHsl();return r.l+=e/100,r.l=N(r.l),h(r)}function A(t,e){e=0===e?0:e||10;var r=h(t).toRgb();return r.r=l(0,c(255,r.r-u(-e/100*255))),r.g=l(0,c(255,r.g-u(-e/100*255))),r.b=l(0,c(255,r.b-u(-e/100*255))),h(r)}function w(t,e){e=0===e?0:e||10;var r=h(t).toHsl();return r.l-=e/100,r.l=N(r.l),h(r)}function x(t,e){var r=h(t).toHsl(),n=(r.h+e)%360;return r.h=n<0?360+n:n,h(r)}function S(t){var e=h(t).toHsl();return e.h=(e.h+180)%360,h(e)}function C(t){var e=h(t).toHsl(),r=e.h;return[h(t),h({h:(r+120)%360,s:e.s,l:e.l}),h({h:(r+240)%360,s:e.s,l:e.l})]}function E(t){var e=h(t).toHsl(),r=e.h;return[h(t),h({h:(r+90)%360,s:e.s,l:e.l}),h({h:(r+180)%360,s:e.s,l:e.l}),h({h:(r+270)%360,s:e.s,l:e.l})]}function O(t){var e=h(t).toHsl(),r=e.h;return[h(t),h({h:(r+72)%360,s:e.s,l:e.l}),h({h:(r+216)%360,s:e.s,l:e.l})]}function j(t,e,r){e=e||6,r=r||30;var n=h(t).toHsl(),i=360/r,o=[h(t)];for(n.h=(n.h-(i*e>>1)+720)%360;--e;)n.h=(n.h+i)%360,o.push(h(n));return o}function L(t,e){e=e||6;for(var r=h(t).toHsv(),n=r.h,i=r.s,o=r.v,s=[],a=1/e;e--;)s.push(h({h:n,s:i,v:o})),o=(o+a)%1;return s}h.prototype={isDark:function(){return this.getBrightness()<128},isLight:function(){return!this.isDark()},isValid:function(){return this._ok},getOriginalInput:function(){return this._originalInput},getFormat:function(){return this._format},getAlpha:function(){return this._a},getBrightness:function(){var t=this.toRgb();return(299*t.r+587*t.g+114*t.b)/1e3},getLuminance:function(){var t,e,r,n=this.toRgb();return t=n.r/255,e=n.g/255,r=n.b/255,.2126*(t<=.03928?t/12.92:i.pow((t+.055)/1.055,2.4))+.7152*(e<=.03928?e/12.92:i.pow((e+.055)/1.055,2.4))+.0722*(r<=.03928?r/12.92:i.pow((r+.055)/1.055,2.4))},setAlpha:function(t){return this._a=T(t),this._roundA=u(100*this._a)/100,this},toHsv:function(){var t=d(this._r,this._g,this._b);return{h:360*t.h,s:t.s,v:t.v,a:this._a}},toHsvString:function(){var t=d(this._r,this._g,this._b),e=u(360*t.h),r=u(100*t.s),n=u(100*t.v);return 1==this._a?"hsv("+e+", "+r+"%, "+n+"%)":"hsva("+e+", "+r+"%, "+n+"%, "+this._roundA+")"},toHsl:function(){var t=p(this._r,this._g,this._b);return{h:360*t.h,s:t.s,l:t.l,a:this._a}},toHslString:function(){var t=p(this._r,this._g,this._b),e=u(360*t.h),r=u(100*t.s),n=u(100*t.l);return 1==this._a?"hsl("+e+", "+r+"%, "+n+"%)":"hsla("+e+", "+r+"%, "+n+"%, "+this._roundA+")"},toHex:function(t){return g(this._r,this._g,this._b,t)},toHexString:function(t){return"#"+this.toHex(t)},toHex8:function(t){return function(t,e,r,n,i){var o=[D(u(t).toString(16)),D(u(e).toString(16)),D(u(r).toString(16)),D(I(n))];return i&&o[0].charAt(0)==o[0].charAt(1)&&o[1].charAt(0)==o[1].charAt(1)&&o[2].charAt(0)==o[2].charAt(1)&&o[3].charAt(0)==o[3].charAt(1)?o[0].charAt(0)+o[1].charAt(0)+o[2].charAt(0)+o[3].charAt(0):o.join("")}(this._r,this._g,this._b,this._a,t)},toHex8String:function(t){return"#"+this.toHex8(t)},toRgb:function(){return{r:u(this._r),g:u(this._g),b:u(this._b),a:this._a}},toRgbString:function(){return 1==this._a?"rgb("+u(this._r)+", "+u(this._g)+", "+u(this._b)+")":"rgba("+u(this._r)+", "+u(this._g)+", "+u(this._b)+", "+this._roundA+")"},toPercentageRgb:function(){return{r:u(100*R(this._r,255))+"%",g:u(100*R(this._g,255))+"%",b:u(100*R(this._b,255))+"%",a:this._a}},toPercentageRgbString:function(){return 1==this._a?"rgb("+u(100*R(this._r,255))+"%, "+u(100*R(this._g,255))+"%, "+u(100*R(this._b,255))+"%)":"rgba("+u(100*R(this._r,255))+"%, "+u(100*R(this._g,255))+"%, "+u(100*R(this._b,255))+"%, "+this._roundA+")"},toName:function(){return 0===this._a?"transparent":!(this._a<1)&&(M[g(this._r,this._g,this._b,!0)]||!1)},toFilter:function(t){var e="#"+_(this._r,this._g,this._b,this._a),r=e,n=this._gradientType?"GradientType = 1, ":"";if(t){var i=h(t);r="#"+_(i._r,i._g,i._b,i._a)}return"progid:DXImageTransform.Microsoft.gradient("+n+"startColorstr="+e+",endColorstr="+r+")"},toString:function(t){var e=!!t;t=t||this._format;var r=!1,n=this._a<1&&this._a>=0;return e||!n||"hex"!==t&&"hex6"!==t&&"hex3"!==t&&"hex4"!==t&&"hex8"!==t&&"name"!==t?("rgb"===t&&(r=this.toRgbString()),"prgb"===t&&(r=this.toPercentageRgbString()),"hex"!==t&&"hex6"!==t||(r=this.toHexString()),"hex3"===t&&(r=this.toHexString(!0)),"hex4"===t&&(r=this.toHex8String(!0)),"hex8"===t&&(r=this.toHex8String()),"name"===t&&(r=this.toName()),"hsl"===t&&(r=this.toHslString()),"hsv"===t&&(r=this.toHsvString()),r||this.toHexString()):"name"===t&&0===this._a?this.toName():this.toRgbString()},clone:function(){return h(this.toString())},_applyModification:function(t,e){var r=t.apply(null,[this].concat([].slice.call(e)));return this._r=r._r,this._g=r._g,this._b=r._b,this.setAlpha(r._a),this},lighten:function(){return this._applyModification(m,arguments)},brighten:function(){return this._applyModification(A,arguments)},darken:function(){return this._applyModification(w,arguments)},desaturate:function(){return this._applyModification(v,arguments)},saturate:function(){return this._applyModification(b,arguments)},greyscale:function(){return this._applyModification(y,arguments)},spin:function(){return this._applyModification(x,arguments)},_applyCombination:function(t,e){return t.apply(null,[this].concat([].slice.call(e)))},analogous:function(){return this._applyCombination(j,arguments)},complement:function(){return this._applyCombination(S,arguments)},monochromatic:function(){return this._applyCombination(L,arguments)},splitcomplement:function(){return this._applyCombination(O,arguments)},triad:function(){return this._applyCombination(C,arguments)},tetrad:function(){return this._applyCombination(E,arguments)}},h.fromRatio=function(t,e){if("object"==typeof t){var r={};for(var n in t)t.hasOwnProperty(n)&&(r[n]="a"===n?t[n]:F(t[n]));t=r}return h(t,e)},h.equals=function(t,e){return!(!t||!e)&&h(t).toRgbString()==h(e).toRgbString()},h.random=function(){return h.fromRatio({r:f(),g:f(),b:f()})},h.mix=function(t,e,r){r=0===r?0:r||50;var n=h(t).toRgb(),i=h(e).toRgb(),o=r/100;return h({r:(i.r-n.r)*o+n.r,g:(i.g-n.g)*o+n.g,b:(i.b-n.b)*o+n.b,a:(i.a-n.a)*o+n.a})},h.readability=function(t,e){var r=h(t),n=h(e);return(i.max(r.getLuminance(),n.getLuminance())+.05)/(i.min(r.getLuminance(),n.getLuminance())+.05)},h.isReadable=function(t,e,r){var n,i,o,s,a,u=h.readability(t,e);switch(i=!1,(o=r,"AA"!==(s=((o=o||{level:"AA",size:"small"}).level||"AA").toUpperCase())&&"AAA"!==s&&(s="AA"),"small"!==(a=(o.size||"small").toLowerCase())&&"large"!==a&&(a="small"),n={level:s,size:a}).level+n.size){case"AAsmall":case"AAAlarge":i=u>=4.5;break;case"AAlarge":i=u>=3;break;case"AAAsmall":i=u>=7}return i},h.mostReadable=function(t,e,r){var n,i,o,s,a=null,u=0;i=(r=r||{}).includeFallbackColors,o=r.level,s=r.size;for(var c=0;c<e.length;c++)(n=h.readability(t,e[c]))>u&&(u=n,a=h(e[c]));return h.isReadable(t,a,{level:o,size:s})||!i?a:(r.includeFallbackColors=!1,h.mostReadable(t,["#fff","#000"],r))};var k=h.names={aliceblue:"f0f8ff",antiquewhite:"faebd7",aqua:"0ff",aquamarine:"7fffd4",azure:"f0ffff",beige:"f5f5dc",bisque:"ffe4c4",black:"000",blanchedalmond:"ffebcd",blue:"00f",blueviolet:"8a2be2",brown:"a52a2a",burlywood:"deb887",burntsienna:"ea7e5d",cadetblue:"5f9ea0",chartreuse:"7fff00",chocolate:"d2691e",coral:"ff7f50",cornflowerblue:"6495ed",cornsilk:"fff8dc",crimson:"dc143c",cyan:"0ff",darkblue:"00008b",darkcyan:"008b8b",darkgoldenrod:"b8860b",darkgray:"a9a9a9",darkgreen:"006400",darkgrey:"a9a9a9",darkkhaki:"bdb76b",darkmagenta:"8b008b",darkolivegreen:"556b2f",darkorange:"ff8c00",darkorchid:"9932cc",darkred:"8b0000",darksalmon:"e9967a",darkseagreen:"8fbc8f",darkslateblue:"483d8b",darkslategray:"2f4f4f",darkslategrey:"2f4f4f",darkturquoise:"00ced1",darkviolet:"9400d3",deeppink:"ff1493",deepskyblue:"00bfff",dimgray:"696969",dimgrey:"696969",dodgerblue:"1e90ff",firebrick:"b22222",floralwhite:"fffaf0",forestgreen:"228b22",fuchsia:"f0f",gainsboro:"dcdcdc",ghostwhite:"f8f8ff",gold:"ffd700",goldenrod:"daa520",gray:"808080",green:"008000",greenyellow:"adff2f",grey:"808080",honeydew:"f0fff0",hotpink:"ff69b4",indianred:"cd5c5c",indigo:"4b0082",ivory:"fffff0",khaki:"f0e68c",lavender:"e6e6fa",lavenderblush:"fff0f5",lawngreen:"7cfc00",lemonchiffon:"fffacd",lightblue:"add8e6",lightcoral:"f08080",lightcyan:"e0ffff",lightgoldenrodyellow:"fafad2",lightgray:"d3d3d3",lightgreen:"90ee90",lightgrey:"d3d3d3",lightpink:"ffb6c1",lightsalmon:"ffa07a",lightseagreen:"20b2aa",lightskyblue:"87cefa",lightslategray:"789",lightslategrey:"789",lightsteelblue:"b0c4de",lightyellow:"ffffe0",lime:"0f0",limegreen:"32cd32",linen:"faf0e6",magenta:"f0f",maroon:"800000",mediumaquamarine:"66cdaa",mediumblue:"0000cd",mediumorchid:"ba55d3",mediumpurple:"9370db",mediumseagreen:"3cb371",mediumslateblue:"7b68ee",mediumspringgreen:"00fa9a",mediumturquoise:"48d1cc",mediumvioletred:"c71585",midnightblue:"191970",mintcream:"f5fffa",mistyrose:"ffe4e1",moccasin:"ffe4b5",navajowhite:"ffdead",navy:"000080",oldlace:"fdf5e6",olive:"808000",olivedrab:"6b8e23",orange:"ffa500",orangered:"ff4500",orchid:"da70d6",palegoldenrod:"eee8aa",palegreen:"98fb98",paleturquoise:"afeeee",palevioletred:"db7093",papayawhip:"ffefd5",peachpuff:"ffdab9",peru:"cd853f",pink:"ffc0cb",plum:"dda0dd",powderblue:"b0e0e6",purple:"800080",rebeccapurple:"663399",red:"f00",rosybrown:"bc8f8f",royalblue:"4169e1",saddlebrown:"8b4513",salmon:"fa8072",sandybrown:"f4a460",seagreen:"2e8b57",seashell:"fff5ee",sienna:"a0522d",silver:"c0c0c0",skyblue:"87ceeb",slateblue:"6a5acd",slategray:"708090",slategrey:"708090",snow:"fffafa",springgreen:"00ff7f",steelblue:"4682b4",tan:"d2b48c",teal:"008080",thistle:"d8bfd8",tomato:"ff6347",turquoise:"40e0d0",violet:"ee82ee",wheat:"f5deb3",white:"fff",whitesmoke:"f5f5f5",yellow:"ff0",yellowgreen:"9acd32"},M=h.hexNames=function(t){var e={};for(var r in t)t.hasOwnProperty(r)&&(e[t[r]]=r);return e}(k);function T(t){return t=parseFloat(t),(isNaN(t)||t<0||t>1)&&(t=1),t}function R(t,e){(function(t){return"string"==typeof t&&-1!=t.indexOf(".")&&1===parseFloat(t)})(t)&&(t="100%");var r=function(t){return"string"==typeof t&&-1!=t.indexOf("%")}(t);return t=c(e,l(0,parseFloat(t))),r&&(t=parseInt(t*e,10)/100),i.abs(t-e)<1e-6?1:t%e/parseFloat(e)}function N(t){return c(1,l(0,t))}function q(t){return parseInt(t,16)}function D(t){return 1==t.length?"0"+t:""+t}function F(t){return t<=1&&(t=100*t+"%"),t}function I(t){return i.round(255*parseFloat(t)).toString(16)}function B(t){return q(t)/255}var P,z,H,U=(z="[\\s|\\(]+("+(P="(?:[-\\+]?\\d*\\.\\d+%?)|(?:[-\\+]?\\d+%?)")+")[,|\\s]+("+P+")[,|\\s]+("+P+")\\s*\\)?",H="[\\s|\\(]+("+P+")[,|\\s]+("+P+")[,|\\s]+("+P+")[,|\\s]+("+P+")\\s*\\)?",{CSS_UNIT:new RegExp(P),rgb:new RegExp("rgb"+z),rgba:new RegExp("rgba"+H),hsl:new RegExp("hsl"+z),hsla:new RegExp("hsla"+H),hsv:new RegExp("hsv"+z),hsva:new RegExp("hsva"+H),hex3:/^#?([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})$/,hex6:/^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/,hex4:/^#?([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})$/,hex8:/^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/});function G(t){return!!U.CSS_UNIT.exec(t)}t.exports?t.exports=h:void 0===(n=function(){return h}.call(e,r,e,t))||(t.exports=n)}(Math)},607:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0}),e.Cursor=e.default=void 0;var i=n(r(678));e.default=i.default;var o=n(r(353));e.Cursor=o.default,r(413)},353:(t,e,r)=>{"use strict";Object.defineProperty(e,"__esModule",{value:!0});var n=r(621),i=function(){function t(t,e,r){this.id=t,this.name=e,this.color=r}return t.prototype.build=function(e){var r=document.createElement(t.CONTAINER_ELEMENT_TAG);r.classList.add(t.CURSOR_CLASS),r.id="ql-cursor-".concat(this.id),r.innerHTML=e.template;var n=r.getElementsByClassName(t.SELECTION_CLASS)[0],i=r.getElementsByClassName(t.CARET_CONTAINER_CLASS)[0],o=i.getElementsByClassName(t.CARET_CLASS)[0],s=r.getElementsByClassName(t.FLAG_CLASS)[0];return s.style.backgroundColor=this.color,o.style.backgroundColor=this.color,r.getElementsByClassName(t.NAME_CLASS)[0].textContent=this.name,this._hideDelay="".concat(e.hideDelayMs,"ms"),this._hideSpeedMs=e.hideSpeedMs,this._positionFlag=e.positionFlag,s.style.transitionDelay=this._hideDelay,s.style.transitionDuration="".concat(this._hideSpeedMs,"ms"),this._el=r,this._selectionEl=n,this._caretEl=i,this._flagEl=s,this._el},t.prototype.show=function(){this._el.classList.remove(t.HIDDEN_CLASS)},t.prototype.hide=function(){this._el.classList.add(t.HIDDEN_CLASS)},t.prototype.remove=function(){this._el.parentNode.removeChild(this._el)},t.prototype.toggleFlag=function(e){var r=this;this._flagEl.classList.toggle(t.SHOW_FLAG_CLASS,e)||(this._flagEl.classList.add(t.NO_DELAY_CLASS),setTimeout((function(){return r._flagEl.classList.remove(t.NO_DELAY_CLASS)}),this._hideSpeedMs))},t.prototype.updateCaret=function(t,e){this._caretEl.style.top="".concat(t.top,"px"),this._caretEl.style.left="".concat(t.left,"px"),this._caretEl.style.height="".concat(t.height,"px"),this._positionFlag?this._positionFlag(this._flagEl,t,e):this._updateCaretFlag(t,e)},t.prototype.updateSelection=function(t,e){var r=this;this._clearSelection(),t=t||[],t=Array.from(t),t=this._sanitize(t),(t=this._sortByDomPosition(t)).forEach((function(t){return r._addSelection(t,e)}))},t.prototype._updateCaretFlag=function(e,r){this._flagEl.style.width="";var n=this._flagEl.getBoundingClientRect();this._flagEl.classList.remove(t.FLAG_FLIPPED_CLASS),e.left>r.width-n.width&&this._flagEl.classList.add(t.FLAG_FLIPPED_CLASS),this._flagEl.style.left="".concat(e.left,"px"),this._flagEl.style.top="".concat(e.top,"px"),this._flagEl.style.width="".concat(Math.ceil(n.width),"px")},t.prototype._clearSelection=function(){this._selectionEl.innerHTML=""},t.prototype._addSelection=function(t,e){var r=this._selectionBlock(t,e);this._selectionEl.appendChild(r)},t.prototype._selectionBlock=function(e,r){var i=document.createElement(t.SELECTION_ELEMENT_TAG);return i.classList.add(t.SELECTION_BLOCK_CLASS),i.style.top="".concat(e.top-r.top,"px"),i.style.left="".concat(e.left-r.left,"px"),i.style.width="".concat(e.width,"px"),i.style.height="".concat(e.height,"px"),i.style.backgroundColor=n(this.color).setAlpha(.3).toString(),i},t.prototype._sortByDomPosition=function(t){return t.sort((function(t,e){return t.top===e.top?t.left-e.left:t.top-e.top}))},t.prototype._sanitize=function(t){var e=this,r=new Set;return t.filter((function(t){if(!t.width||!t.height)return!1;var n=e._serialize(t);return!r.has(n)&&(r.add(n),!0)}))},t.prototype._serialize=function(t){return["top:".concat(t.top),"right:".concat(t.right),"bottom:".concat(t.bottom),"left:".concat(t.left)].join(";")},t.CONTAINER_ELEMENT_TAG="SPAN",t.SELECTION_ELEMENT_TAG="SPAN",t.CURSOR_CLASS="ql-cursor",t.SELECTION_CLASS="ql-cursor-selections",t.SELECTION_BLOCK_CLASS="ql-cursor-selection-block",t.CARET_CLASS="ql-cursor-caret",t.CARET_CONTAINER_CLASS="ql-cursor-caret-container",t.FLAG_CLASS="ql-cursor-flag",t.SHOW_FLAG_CLASS="show-flag",t.FLAG_FLIPPED_CLASS="flag-flipped",t.NAME_CLASS="ql-cursor-name",t.HIDDEN_CLASS="hidden",t.NO_DELAY_CLASS="no-delay",t}();e.default=i},678:function(t,e,r){"use strict";var n=this&&this.__createBinding||(Object.create?function(t,e,r,n){void 0===n&&(n=r),Object.defineProperty(t,n,{enumerable:!0,get:function(){return e[r]}})}:function(t,e,r,n){void 0===n&&(n=r),t[n]=e[r]}),i=this&&this.__setModuleDefault||(Object.create?function(t,e){Object.defineProperty(t,"default",{enumerable:!0,value:e})}:function(t,e){t.default=e}),o=this&&this.__importStar||function(t){if(t&&t.__esModule)return t;var e={};if(null!=t)for(var r in t)"default"!==r&&Object.prototype.hasOwnProperty.call(t,r)&&n(e,t,r);return i(e,t),e},s=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0});var a=s(r(353)),u=o(r(165)),c=s(r(338)),l=s(r(33)),f=r(895),h=function(){function t(t,e){void 0===e&&(e={}),this._cursors={},this._isObserving=!1,this.quill=t,this.options=this._setDefaults(e),this._container=this.quill.addContainer(this.options.containerClass),this._boundsContainer=this.options.boundsContainer||this.quill.container,this._currentSelection=this.quill.getSelection(),this._registerSelectionChangeListeners(),this._registerTextChangeListener(),this._registerDomListeners()}return t.prototype.createCursor=function(t,e,r){var n=this._cursors[t];if(!n){n=new a.default(t,e,r),this._cursors[t]=n;var i=n.build(this.options);this._container.appendChild(i)}return n},t.prototype.moveCursor=function(t,e){var r=this._cursors[t];r&&(r.range=e,this._updateCursor(r))},t.prototype.removeCursor=function(t){var e=this._cursors[t];e&&(e.remove(),delete this._cursors[t])},t.prototype.update=function(){var t=this;this.cursors().forEach((function(e){return t._updateCursor(e)}))},t.prototype.clearCursors=function(){var t=this;this.cursors().forEach((function(e){return t.removeCursor(e.id)}))},t.prototype.toggleFlag=function(t,e){var r=this._cursors[t];r&&r.toggleFlag(e)},t.prototype.cursors=function(){var t=this;return Object.keys(this._cursors).map((function(e){return t._cursors[e]}))},t.prototype._registerSelectionChangeListeners=function(){var t=this;this.quill.on(this.quill.constructor.events.SELECTION_CHANGE,(function(e){t._currentSelection=e}))},t.prototype._registerTextChangeListener=function(){var t=this;this.quill.on(this.quill.constructor.events.TEXT_CHANGE,(function(e){return t._handleTextChange(e)}))},t.prototype._registerDomListeners=function(){var t=this;this.quill.container.getElementsByClassName("ql-editor")[0].addEventListener("scroll",(function(){return t.update()}))},t.prototype._registerResizeObserver=function(){var t=this;if(!this._isObserving){var e=this.quill.container.getElementsByClassName("ql-editor")[0],r=new l.default((function(e){e[0].target.isConnected||(r.disconnect(),t._isObserving=!1),t.update()}));r.observe(e),this._isObserving=!0}},t.prototype._updateCursor=function(t){if(this._registerResizeObserver(),!t.range)return t.hide();var e=this._indexWithinQuillBounds(t.range.index),r=this._indexWithinQuillBounds(t.range.index+t.range.length),n=this.quill.getLeaf(e),i=this.quill.getLeaf(r);if(!this._leafIsValid(n)||!this._leafIsValid(i))return t.hide();t.show();var o=this._boundsContainer.getBoundingClientRect(),s=this.quill.getBounds(r);t.updateCaret(s,o);var a=this._lineRanges(t,n,i).reduce((function(t,e){return t.concat(Array.from(u.getClientRects(e)))}),[]);t.updateSelection(a,o)},t.prototype._indexWithinQuillBounds=function(t){var e=this.quill.getLength(),r=e?e-1:0;return t=Math.max(t,0),Math.min(t,r)},t.prototype._leafIsValid=function(t){return t&&t[0]&&t[0].domNode&&t[1]>=0},t.prototype._handleTextChange=function(t){var e=this;window.setTimeout((function(){e.options.transformOnTextChange&&e._transformCursors(t),e.options.selectionChangeSource&&(e._emitSelection(),e.update())}))},t.prototype._emitSelection=function(){this.quill.emitter.emit(this.quill.constructor.events.SELECTION_CHANGE,this.quill.getSelection(),this._currentSelection,this.options.selectionChangeSource)},t.prototype._setDefaults=function(e){return(e=Object.assign({},e)).template||(e.template=t.DEFAULTS.template),e.containerClass||(e.containerClass=t.DEFAULTS.containerClass),null!==e.selectionChangeSource&&(e.selectionChangeSource||(e.selectionChangeSource=t.DEFAULTS.selectionChangeSource)),e.hideDelayMs=Number.isInteger(e.hideDelayMs)?e.hideDelayMs:t.DEFAULTS.hideDelayMs,e.hideSpeedMs=Number.isInteger(e.hideSpeedMs)?e.hideSpeedMs:t.DEFAULTS.hideSpeedMs,e.transformOnTextChange=!!e.transformOnTextChange,e},t.prototype._lineRanges=function(t,e,r){var n=this.quill.getLines(t.range);return n.reduce((function(t,i,o){if(!i.children){var s=document.createRange();return s.selectNode(i.domNode),t.concat(s)}var a=0===o?e:i.path(0).pop(),u=a[0],c=a[1],l=o===n.length-1?r:i.path(i.length()-1).pop(),f=l[0],h=l[1],p=document.createRange();return u.domNode.nodeType===Node.TEXT_NODE?p.setStart(u.domNode,c):p.setStartBefore(u.domNode),f.domNode.nodeType===Node.TEXT_NODE?p.setEnd(f.domNode,h):p.setEndAfter(f.domNode),t.concat(p)}),[])},t.prototype._transformCursors=function(t){var e=this;t=new f(t),this.cursors().filter((function(t){return t.range})).forEach((function(r){r.range.index=t.transformPosition(r.range.index),e._updateCursor(r)}))},t.DEFAULTS={template:c.default,containerClass:"ql-cursors",selectionChangeSource:"api",hideDelayMs:3e3,hideSpeedMs:400},t}();e.default=h},338:function(t,e,r){"use strict";var n=this&&this.__importDefault||function(t){return t&&t.__esModule?t:{default:t}};Object.defineProperty(e,"__esModule",{value:!0});var i=n(r(353)),o='\n  <span class="'.concat(i.default.SELECTION_CLASS,'"></span>\n  <span class="').concat(i.default.CARET_CONTAINER_CLASS,'">\n    <span class="').concat(i.default.CARET_CLASS,'"></span>\n  </span>\n  <div class="').concat(i.default.FLAG_CLASS,'">\n    <small class="').concat(i.default.NAME_CLASS,'"></small>\n  </div>\n');e.default=o}},e={};function r(n){var i=e[n];if(void 0!==i)return i.exports;var o=e[n]={id:n,loaded:!1,exports:{}};return t[n].call(o.exports,o,o.exports,r),o.loaded=!0,o.exports}r.n=t=>{var e=t&&t.__esModule?()=>t.default:()=>t;return r.d(e,{a:e}),e},r.d=(t,e)=>{for(var n in e)r.o(e,n)&&!r.o(t,n)&&Object.defineProperty(t,n,{enumerable:!0,get:e[n]})},r.g=function(){if("object"==typeof globalThis)return globalThis;try{return this||new Function("return this")()}catch(t){if("object"==typeof window)return window}}(),r.o=(t,e)=>Object.prototype.hasOwnProperty.call(t,e),r.r=t=>{"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(t,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(t,"__esModule",{value:!0})},r.nmd=t=>(t.paths=[],t.children||(t.children=[]),t);var n=r(607);return n.default})()}));
+},{}],17:[function(require,module,exports){
 (function (Buffer){(function (){
 /*!
  * Quill Editor v1.3.7
@@ -19040,7 +19427,7 @@ module.exports = __webpack_require__(63);
 /******/ ])["default"];
 });
 }).call(this)}).call(this,require("buffer").Buffer)
-},{"buffer":3}],16:[function(require,module,exports){
+},{"buffer":4}],18:[function(require,module,exports){
 'use strict';
 
 /*! *****************************************************************************
@@ -19631,10 +20018,10 @@ var ReconnectingWebSocket = /** @class */ (function () {
 
 module.exports = ReconnectingWebSocket;
 
-},{}],17:[function(require,module,exports){
+},{}],19:[function(require,module,exports){
 module.exports = require('./lib/type');
 
-},{"./lib/type":18}],18:[function(require,module,exports){
+},{"./lib/type":20}],20:[function(require,module,exports){
 var Delta = require('quill-delta');
 
 
@@ -19706,7 +20093,7 @@ module.exports = {
   }
 };
 
-},{"quill-delta":21}],19:[function(require,module,exports){
+},{"quill-delta":23}],21:[function(require,module,exports){
 /**
  * This library modifies the diff-patch-match library by Neil Fraser
  * by removing the patch and match functionality and certain advanced
@@ -20482,7 +20869,7 @@ diff.EQUAL = DIFF_EQUAL;
 
 module.exports = diff;
 
-},{}],20:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 "use strict";
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -20579,7 +20966,7 @@ var AttributeMap;
 })(AttributeMap || (AttributeMap = {}));
 exports.default = AttributeMap;
 
-},{"lodash.clonedeep":8,"lodash.isequal":9}],21:[function(require,module,exports){
+},{"lodash.clonedeep":9,"lodash.isequal":10}],23:[function(require,module,exports){
 "use strict";
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -20985,7 +21372,7 @@ var Delta = /** @class */ (function () {
 }());
 module.exports = Delta;
 
-},{"./AttributeMap":20,"./Op":23,"fast-diff":19,"lodash.clonedeep":8,"lodash.isequal":9}],22:[function(require,module,exports){
+},{"./AttributeMap":22,"./Op":25,"fast-diff":21,"lodash.clonedeep":9,"lodash.isequal":10}],24:[function(require,module,exports){
 "use strict";
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -21089,7 +21476,7 @@ var Iterator = /** @class */ (function () {
 }());
 exports.default = Iterator;
 
-},{"./Op":23}],23:[function(require,module,exports){
+},{"./Op":25}],25:[function(require,module,exports){
 "use strict";
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -21117,7 +21504,7 @@ var Op;
 })(Op || (Op = {}));
 exports.default = Op;
 
-},{"./Iterator":22}],24:[function(require,module,exports){
+},{"./Iterator":24}],26:[function(require,module,exports){
 var Doc = require('./doc');
 var Query = require('./query');
 var Presence = require('./presence/presence');
@@ -21919,7 +22306,7 @@ Connection.prototype._handlePresenceRequest = function(error, message) {
   if (presence) presence._broadcastAllLocalPresence(error, message);
 };
 
-},{"../emitter":37,"../error":38,"../logger":39,"../types":43,"../util":44,"./doc":25,"./presence/doc-presence":27,"./presence/presence":30,"./query":33,"./snapshot-request/snapshot-timestamp-request":35,"./snapshot-request/snapshot-version-request":36}],25:[function(require,module,exports){
+},{"../emitter":39,"../error":40,"../logger":41,"../types":45,"../util":46,"./doc":27,"./presence/doc-presence":29,"./presence/presence":32,"./query":35,"./snapshot-request/snapshot-timestamp-request":37,"./snapshot-request/snapshot-version-request":38}],27:[function(require,module,exports){
 var emitter = require('../emitter');
 var logger = require('../logger');
 var ShareDBError = require('../error');
@@ -22973,7 +23360,7 @@ Doc.prototype._clearInflightOp = function(err) {
   if (err && !called) return this.emit('error', err);
 };
 
-},{"../emitter":37,"../error":38,"../logger":39,"../types":43,"../util":44,"fast-deep-equal":5}],26:[function(require,module,exports){
+},{"../emitter":39,"../error":40,"../logger":41,"../types":45,"../util":46,"fast-deep-equal":6}],28:[function(require,module,exports){
 exports.Connection = require('./connection');
 exports.Doc = require('./doc');
 exports.Error = require('../error');
@@ -22981,7 +23368,7 @@ exports.Query = require('./query');
 exports.types = require('../types');
 exports.logger = require('../logger');
 
-},{"../error":38,"../logger":39,"../types":43,"./connection":24,"./doc":25,"./query":33}],27:[function(require,module,exports){
+},{"../error":40,"../logger":41,"../types":45,"./connection":26,"./doc":27,"./query":35}],29:[function(require,module,exports){
 var Presence = require('./presence');
 var LocalDocPresence = require('./local-doc-presence');
 var RemoteDocPresence = require('./remote-doc-presence');
@@ -23009,7 +23396,7 @@ DocPresence.prototype._createRemotePresence = function(id) {
   return new RemoteDocPresence(this, id);
 };
 
-},{"./local-doc-presence":28,"./presence":30,"./remote-doc-presence":31}],28:[function(require,module,exports){
+},{"./local-doc-presence":30,"./presence":32,"./remote-doc-presence":33}],30:[function(require,module,exports){
 var LocalPresence = require('./local-presence');
 var ShareDBError = require('../../error');
 var util = require('../../util');
@@ -23152,7 +23539,7 @@ LocalDocPresence.prototype._transformPresence = function(value, op, source) {
   return type.transformPresence(value, op, source);
 };
 
-},{"../../error":38,"../../util":44,"./local-presence":29}],29:[function(require,module,exports){
+},{"../../error":40,"../../util":46,"./local-presence":31}],31:[function(require,module,exports){
 var emitter = require('../../emitter');
 var util = require('../../util');
 
@@ -23233,7 +23620,7 @@ LocalPresence.prototype._callbackOrEmit = function(error, callback) {
   if (error) this.emit('error', error);
 };
 
-},{"../../emitter":37,"../../util":44}],30:[function(require,module,exports){
+},{"../../emitter":39,"../../util":46}],32:[function(require,module,exports){
 var emitter = require('../../emitter');
 var LocalPresence = require('./local-presence');
 var RemotePresence = require('./remote-presence');
@@ -23406,7 +23793,7 @@ Presence.prototype._callEachOrEmit = function(callbacks, error) {
   if (!called && error) this.emit('error', error);
 };
 
-},{"../../emitter":37,"../../util":44,"./local-presence":29,"./remote-presence":32,"async":45,"hat":6}],31:[function(require,module,exports){
+},{"../../emitter":39,"../../util":46,"./local-presence":31,"./remote-presence":34,"async":47,"hat":7}],33:[function(require,module,exports){
 var RemotePresence = require('./remote-presence');
 var ot = require('../../ot');
 
@@ -23559,7 +23946,7 @@ RemoteDocPresence.prototype._cacheOp = function(op, isOwnOp) {
   }
 };
 
-},{"../../ot":41,"./remote-presence":32}],32:[function(require,module,exports){
+},{"../../ot":43,"./remote-presence":34}],34:[function(require,module,exports){
 var util = require('../../util');
 
 module.exports = RemotePresence;
@@ -23585,7 +23972,7 @@ RemotePresence.prototype.destroy = function(callback) {
   if (callback) util.nextTick(callback);
 };
 
-},{"../../util":44}],33:[function(require,module,exports){
+},{"../../util":46}],35:[function(require,module,exports){
 var emitter = require('../emitter');
 var util = require('../util');
 
@@ -23786,7 +24173,7 @@ Query.prototype._handleExtra = function(extra) {
   this.emit('extra', extra);
 };
 
-},{"../emitter":37,"../util":44}],34:[function(require,module,exports){
+},{"../emitter":39,"../util":46}],36:[function(require,module,exports){
 var Snapshot = require('../../snapshot');
 var emitter = require('../../emitter');
 
@@ -23842,7 +24229,7 @@ SnapshotRequest.prototype._handleResponse = function(error, message) {
   this.callback(null, snapshot);
 };
 
-},{"../../emitter":37,"../../snapshot":42}],35:[function(require,module,exports){
+},{"../../emitter":39,"../../snapshot":44}],37:[function(require,module,exports){
 var SnapshotRequest = require('./snapshot-request');
 var util = require('../../util');
 
@@ -23870,7 +24257,7 @@ SnapshotTimestampRequest.prototype._message = function() {
   };
 };
 
-},{"../../util":44,"./snapshot-request":34}],36:[function(require,module,exports){
+},{"../../util":46,"./snapshot-request":36}],38:[function(require,module,exports){
 var SnapshotRequest = require('./snapshot-request');
 var util = require('../../util');
 
@@ -23898,7 +24285,7 @@ SnapshotVersionRequest.prototype._message = function() {
   };
 };
 
-},{"../../util":44,"./snapshot-request":34}],37:[function(require,module,exports){
+},{"../../util":46,"./snapshot-request":36}],39:[function(require,module,exports){
 var EventEmitter = require('events').EventEmitter;
 
 exports.EventEmitter = EventEmitter;
@@ -23910,7 +24297,7 @@ function mixin(Constructor) {
   }
 }
 
-},{"events":4}],38:[function(require,module,exports){
+},{"events":5}],40:[function(require,module,exports){
 function ShareDBError(code, message) {
   this.code = code;
   this.message = message || '';
@@ -23985,12 +24372,12 @@ ShareDBError.CODES = {
 
 module.exports = ShareDBError;
 
-},{}],39:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 var Logger = require('./logger');
 var logger = new Logger();
 module.exports = logger;
 
-},{"./logger":40}],40:[function(require,module,exports){
+},{"./logger":42}],42:[function(require,module,exports){
 var SUPPORTED_METHODS = [
   'info',
   'warn',
@@ -24018,7 +24405,7 @@ Logger.prototype.setMethods = function(overrides) {
   });
 };
 
-},{}],41:[function(require,module,exports){
+},{}],43:[function(require,module,exports){
 // This contains the master OT functions for the database. They look like
 // ot-types style operational transform functions, but they're a bit different.
 // These functions understand versions and can deal with out of bound create &
@@ -24270,7 +24657,7 @@ function normalizeLegacyJson0Ops(snapshot, json0Op) {
   }
 }
 
-},{"./error":38,"./types":43,"./util":44}],42:[function(require,module,exports){
+},{"./error":40,"./types":45,"./util":46}],44:[function(require,module,exports){
 module.exports = Snapshot;
 function Snapshot(id, version, type, data, meta) {
   this.id = id;
@@ -24280,7 +24667,7 @@ function Snapshot(id, version, type, data, meta) {
   this.m = meta;
 }
 
-},{}],43:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 
 exports.defaultType = require('ot-json0').type;
 
@@ -24293,7 +24680,7 @@ exports.register = function(type) {
 
 exports.register(exports.defaultType);
 
-},{"ot-json0":11}],44:[function(require,module,exports){
+},{"ot-json0":12}],46:[function(require,module,exports){
 (function (process){(function (){
 
 exports.doNothing = doNothing;
@@ -24400,7 +24787,7 @@ exports.clone = function(obj) {
 
 
 }).call(this)}).call(this,require('_process'))
-},{"_process":14}],45:[function(require,module,exports){
+},{"_process":15}],47:[function(require,module,exports){
 (function (process,global,setImmediate){(function (){
 (function (global, factory) {
   typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
@@ -30016,7 +30403,7 @@ Object.defineProperty(exports, '__esModule', { value: true });
 })));
 
 }).call(this)}).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {},require("timers").setImmediate)
-},{"_process":14,"timers":46}],46:[function(require,module,exports){
+},{"_process":15,"timers":48}],48:[function(require,module,exports){
 (function (setImmediate,clearImmediate){(function (){
 var nextTick = require('process/browser.js').nextTick;
 var apply = Function.prototype.apply;
@@ -30095,4 +30482,1201 @@ exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate :
   delete immediateIds[id];
 };
 }).call(this)}).call(this,require("timers").setImmediate,require("timers").clearImmediate)
-},{"process/browser.js":14,"timers":46}]},{},[1]);
+},{"process/browser.js":15,"timers":48}],49:[function(require,module,exports){
+// TinyColor v1.4.2
+// https://github.com/bgrins/TinyColor
+// Brian Grinstead, MIT License
+
+(function(Math) {
+
+var trimLeft = /^\s+/,
+    trimRight = /\s+$/,
+    tinyCounter = 0,
+    mathRound = Math.round,
+    mathMin = Math.min,
+    mathMax = Math.max,
+    mathRandom = Math.random;
+
+function tinycolor (color, opts) {
+
+    color = (color) ? color : '';
+    opts = opts || { };
+
+    // If input is already a tinycolor, return itself
+    if (color instanceof tinycolor) {
+       return color;
+    }
+    // If we are called as a function, call using new instead
+    if (!(this instanceof tinycolor)) {
+        return new tinycolor(color, opts);
+    }
+
+    var rgb = inputToRGB(color);
+    this._originalInput = color,
+    this._r = rgb.r,
+    this._g = rgb.g,
+    this._b = rgb.b,
+    this._a = rgb.a,
+    this._roundA = mathRound(100*this._a) / 100,
+    this._format = opts.format || rgb.format;
+    this._gradientType = opts.gradientType;
+
+    // Don't let the range of [0,255] come back in [0,1].
+    // Potentially lose a little bit of precision here, but will fix issues where
+    // .5 gets interpreted as half of the total, instead of half of 1
+    // If it was supposed to be 128, this was already taken care of by `inputToRgb`
+    if (this._r < 1) { this._r = mathRound(this._r); }
+    if (this._g < 1) { this._g = mathRound(this._g); }
+    if (this._b < 1) { this._b = mathRound(this._b); }
+
+    this._ok = rgb.ok;
+    this._tc_id = tinyCounter++;
+}
+
+tinycolor.prototype = {
+    isDark: function() {
+        return this.getBrightness() < 128;
+    },
+    isLight: function() {
+        return !this.isDark();
+    },
+    isValid: function() {
+        return this._ok;
+    },
+    getOriginalInput: function() {
+      return this._originalInput;
+    },
+    getFormat: function() {
+        return this._format;
+    },
+    getAlpha: function() {
+        return this._a;
+    },
+    getBrightness: function() {
+        //http://www.w3.org/TR/AERT#color-contrast
+        var rgb = this.toRgb();
+        return (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+    },
+    getLuminance: function() {
+        //http://www.w3.org/TR/2008/REC-WCAG20-20081211/#relativeluminancedef
+        var rgb = this.toRgb();
+        var RsRGB, GsRGB, BsRGB, R, G, B;
+        RsRGB = rgb.r/255;
+        GsRGB = rgb.g/255;
+        BsRGB = rgb.b/255;
+
+        if (RsRGB <= 0.03928) {R = RsRGB / 12.92;} else {R = Math.pow(((RsRGB + 0.055) / 1.055), 2.4);}
+        if (GsRGB <= 0.03928) {G = GsRGB / 12.92;} else {G = Math.pow(((GsRGB + 0.055) / 1.055), 2.4);}
+        if (BsRGB <= 0.03928) {B = BsRGB / 12.92;} else {B = Math.pow(((BsRGB + 0.055) / 1.055), 2.4);}
+        return (0.2126 * R) + (0.7152 * G) + (0.0722 * B);
+    },
+    setAlpha: function(value) {
+        this._a = boundAlpha(value);
+        this._roundA = mathRound(100*this._a) / 100;
+        return this;
+    },
+    toHsv: function() {
+        var hsv = rgbToHsv(this._r, this._g, this._b);
+        return { h: hsv.h * 360, s: hsv.s, v: hsv.v, a: this._a };
+    },
+    toHsvString: function() {
+        var hsv = rgbToHsv(this._r, this._g, this._b);
+        var h = mathRound(hsv.h * 360), s = mathRound(hsv.s * 100), v = mathRound(hsv.v * 100);
+        return (this._a == 1) ?
+          "hsv("  + h + ", " + s + "%, " + v + "%)" :
+          "hsva(" + h + ", " + s + "%, " + v + "%, "+ this._roundA + ")";
+    },
+    toHsl: function() {
+        var hsl = rgbToHsl(this._r, this._g, this._b);
+        return { h: hsl.h * 360, s: hsl.s, l: hsl.l, a: this._a };
+    },
+    toHslString: function() {
+        var hsl = rgbToHsl(this._r, this._g, this._b);
+        var h = mathRound(hsl.h * 360), s = mathRound(hsl.s * 100), l = mathRound(hsl.l * 100);
+        return (this._a == 1) ?
+          "hsl("  + h + ", " + s + "%, " + l + "%)" :
+          "hsla(" + h + ", " + s + "%, " + l + "%, "+ this._roundA + ")";
+    },
+    toHex: function(allow3Char) {
+        return rgbToHex(this._r, this._g, this._b, allow3Char);
+    },
+    toHexString: function(allow3Char) {
+        return '#' + this.toHex(allow3Char);
+    },
+    toHex8: function(allow4Char) {
+        return rgbaToHex(this._r, this._g, this._b, this._a, allow4Char);
+    },
+    toHex8String: function(allow4Char) {
+        return '#' + this.toHex8(allow4Char);
+    },
+    toRgb: function() {
+        return { r: mathRound(this._r), g: mathRound(this._g), b: mathRound(this._b), a: this._a };
+    },
+    toRgbString: function() {
+        return (this._a == 1) ?
+          "rgb("  + mathRound(this._r) + ", " + mathRound(this._g) + ", " + mathRound(this._b) + ")" :
+          "rgba(" + mathRound(this._r) + ", " + mathRound(this._g) + ", " + mathRound(this._b) + ", " + this._roundA + ")";
+    },
+    toPercentageRgb: function() {
+        return { r: mathRound(bound01(this._r, 255) * 100) + "%", g: mathRound(bound01(this._g, 255) * 100) + "%", b: mathRound(bound01(this._b, 255) * 100) + "%", a: this._a };
+    },
+    toPercentageRgbString: function() {
+        return (this._a == 1) ?
+          "rgb("  + mathRound(bound01(this._r, 255) * 100) + "%, " + mathRound(bound01(this._g, 255) * 100) + "%, " + mathRound(bound01(this._b, 255) * 100) + "%)" :
+          "rgba(" + mathRound(bound01(this._r, 255) * 100) + "%, " + mathRound(bound01(this._g, 255) * 100) + "%, " + mathRound(bound01(this._b, 255) * 100) + "%, " + this._roundA + ")";
+    },
+    toName: function() {
+        if (this._a === 0) {
+            return "transparent";
+        }
+
+        if (this._a < 1) {
+            return false;
+        }
+
+        return hexNames[rgbToHex(this._r, this._g, this._b, true)] || false;
+    },
+    toFilter: function(secondColor) {
+        var hex8String = '#' + rgbaToArgbHex(this._r, this._g, this._b, this._a);
+        var secondHex8String = hex8String;
+        var gradientType = this._gradientType ? "GradientType = 1, " : "";
+
+        if (secondColor) {
+            var s = tinycolor(secondColor);
+            secondHex8String = '#' + rgbaToArgbHex(s._r, s._g, s._b, s._a);
+        }
+
+        return "progid:DXImageTransform.Microsoft.gradient("+gradientType+"startColorstr="+hex8String+",endColorstr="+secondHex8String+")";
+    },
+    toString: function(format) {
+        var formatSet = !!format;
+        format = format || this._format;
+
+        var formattedString = false;
+        var hasAlpha = this._a < 1 && this._a >= 0;
+        var needsAlphaFormat = !formatSet && hasAlpha && (format === "hex" || format === "hex6" || format === "hex3" || format === "hex4" || format === "hex8" || format === "name");
+
+        if (needsAlphaFormat) {
+            // Special case for "transparent", all other non-alpha formats
+            // will return rgba when there is transparency.
+            if (format === "name" && this._a === 0) {
+                return this.toName();
+            }
+            return this.toRgbString();
+        }
+        if (format === "rgb") {
+            formattedString = this.toRgbString();
+        }
+        if (format === "prgb") {
+            formattedString = this.toPercentageRgbString();
+        }
+        if (format === "hex" || format === "hex6") {
+            formattedString = this.toHexString();
+        }
+        if (format === "hex3") {
+            formattedString = this.toHexString(true);
+        }
+        if (format === "hex4") {
+            formattedString = this.toHex8String(true);
+        }
+        if (format === "hex8") {
+            formattedString = this.toHex8String();
+        }
+        if (format === "name") {
+            formattedString = this.toName();
+        }
+        if (format === "hsl") {
+            formattedString = this.toHslString();
+        }
+        if (format === "hsv") {
+            formattedString = this.toHsvString();
+        }
+
+        return formattedString || this.toHexString();
+    },
+    clone: function() {
+        return tinycolor(this.toString());
+    },
+
+    _applyModification: function(fn, args) {
+        var color = fn.apply(null, [this].concat([].slice.call(args)));
+        this._r = color._r;
+        this._g = color._g;
+        this._b = color._b;
+        this.setAlpha(color._a);
+        return this;
+    },
+    lighten: function() {
+        return this._applyModification(lighten, arguments);
+    },
+    brighten: function() {
+        return this._applyModification(brighten, arguments);
+    },
+    darken: function() {
+        return this._applyModification(darken, arguments);
+    },
+    desaturate: function() {
+        return this._applyModification(desaturate, arguments);
+    },
+    saturate: function() {
+        return this._applyModification(saturate, arguments);
+    },
+    greyscale: function() {
+        return this._applyModification(greyscale, arguments);
+    },
+    spin: function() {
+        return this._applyModification(spin, arguments);
+    },
+
+    _applyCombination: function(fn, args) {
+        return fn.apply(null, [this].concat([].slice.call(args)));
+    },
+    analogous: function() {
+        return this._applyCombination(analogous, arguments);
+    },
+    complement: function() {
+        return this._applyCombination(complement, arguments);
+    },
+    monochromatic: function() {
+        return this._applyCombination(monochromatic, arguments);
+    },
+    splitcomplement: function() {
+        return this._applyCombination(splitcomplement, arguments);
+    },
+    triad: function() {
+        return this._applyCombination(triad, arguments);
+    },
+    tetrad: function() {
+        return this._applyCombination(tetrad, arguments);
+    }
+};
+
+// If input is an object, force 1 into "1.0" to handle ratios properly
+// String input requires "1.0" as input, so 1 will be treated as 1
+tinycolor.fromRatio = function(color, opts) {
+    if (typeof color == "object") {
+        var newColor = {};
+        for (var i in color) {
+            if (color.hasOwnProperty(i)) {
+                if (i === "a") {
+                    newColor[i] = color[i];
+                }
+                else {
+                    newColor[i] = convertToPercentage(color[i]);
+                }
+            }
+        }
+        color = newColor;
+    }
+
+    return tinycolor(color, opts);
+};
+
+// Given a string or object, convert that input to RGB
+// Possible string inputs:
+//
+//     "red"
+//     "#f00" or "f00"
+//     "#ff0000" or "ff0000"
+//     "#ff000000" or "ff000000"
+//     "rgb 255 0 0" or "rgb (255, 0, 0)"
+//     "rgb 1.0 0 0" or "rgb (1, 0, 0)"
+//     "rgba (255, 0, 0, 1)" or "rgba 255, 0, 0, 1"
+//     "rgba (1.0, 0, 0, 1)" or "rgba 1.0, 0, 0, 1"
+//     "hsl(0, 100%, 50%)" or "hsl 0 100% 50%"
+//     "hsla(0, 100%, 50%, 1)" or "hsla 0 100% 50%, 1"
+//     "hsv(0, 100%, 100%)" or "hsv 0 100% 100%"
+//
+function inputToRGB(color) {
+
+    var rgb = { r: 0, g: 0, b: 0 };
+    var a = 1;
+    var s = null;
+    var v = null;
+    var l = null;
+    var ok = false;
+    var format = false;
+
+    if (typeof color == "string") {
+        color = stringInputToObject(color);
+    }
+
+    if (typeof color == "object") {
+        if (isValidCSSUnit(color.r) && isValidCSSUnit(color.g) && isValidCSSUnit(color.b)) {
+            rgb = rgbToRgb(color.r, color.g, color.b);
+            ok = true;
+            format = String(color.r).substr(-1) === "%" ? "prgb" : "rgb";
+        }
+        else if (isValidCSSUnit(color.h) && isValidCSSUnit(color.s) && isValidCSSUnit(color.v)) {
+            s = convertToPercentage(color.s);
+            v = convertToPercentage(color.v);
+            rgb = hsvToRgb(color.h, s, v);
+            ok = true;
+            format = "hsv";
+        }
+        else if (isValidCSSUnit(color.h) && isValidCSSUnit(color.s) && isValidCSSUnit(color.l)) {
+            s = convertToPercentage(color.s);
+            l = convertToPercentage(color.l);
+            rgb = hslToRgb(color.h, s, l);
+            ok = true;
+            format = "hsl";
+        }
+
+        if (color.hasOwnProperty("a")) {
+            a = color.a;
+        }
+    }
+
+    a = boundAlpha(a);
+
+    return {
+        ok: ok,
+        format: color.format || format,
+        r: mathMin(255, mathMax(rgb.r, 0)),
+        g: mathMin(255, mathMax(rgb.g, 0)),
+        b: mathMin(255, mathMax(rgb.b, 0)),
+        a: a
+    };
+}
+
+
+// Conversion Functions
+// --------------------
+
+// `rgbToHsl`, `rgbToHsv`, `hslToRgb`, `hsvToRgb` modified from:
+// <http://mjijackson.com/2008/02/rgb-to-hsl-and-rgb-to-hsv-color-model-conversion-algorithms-in-javascript>
+
+// `rgbToRgb`
+// Handle bounds / percentage checking to conform to CSS color spec
+// <http://www.w3.org/TR/css3-color/>
+// *Assumes:* r, g, b in [0, 255] or [0, 1]
+// *Returns:* { r, g, b } in [0, 255]
+function rgbToRgb(r, g, b){
+    return {
+        r: bound01(r, 255) * 255,
+        g: bound01(g, 255) * 255,
+        b: bound01(b, 255) * 255
+    };
+}
+
+// `rgbToHsl`
+// Converts an RGB color value to HSL.
+// *Assumes:* r, g, and b are contained in [0, 255] or [0, 1]
+// *Returns:* { h, s, l } in [0,1]
+function rgbToHsl(r, g, b) {
+
+    r = bound01(r, 255);
+    g = bound01(g, 255);
+    b = bound01(b, 255);
+
+    var max = mathMax(r, g, b), min = mathMin(r, g, b);
+    var h, s, l = (max + min) / 2;
+
+    if(max == min) {
+        h = s = 0; // achromatic
+    }
+    else {
+        var d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch(max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+
+        h /= 6;
+    }
+
+    return { h: h, s: s, l: l };
+}
+
+// `hslToRgb`
+// Converts an HSL color value to RGB.
+// *Assumes:* h is contained in [0, 1] or [0, 360] and s and l are contained [0, 1] or [0, 100]
+// *Returns:* { r, g, b } in the set [0, 255]
+function hslToRgb(h, s, l) {
+    var r, g, b;
+
+    h = bound01(h, 360);
+    s = bound01(s, 100);
+    l = bound01(l, 100);
+
+    function hue2rgb(p, q, t) {
+        if(t < 0) t += 1;
+        if(t > 1) t -= 1;
+        if(t < 1/6) return p + (q - p) * 6 * t;
+        if(t < 1/2) return q;
+        if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+    }
+
+    if(s === 0) {
+        r = g = b = l; // achromatic
+    }
+    else {
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+    }
+
+    return { r: r * 255, g: g * 255, b: b * 255 };
+}
+
+// `rgbToHsv`
+// Converts an RGB color value to HSV
+// *Assumes:* r, g, and b are contained in the set [0, 255] or [0, 1]
+// *Returns:* { h, s, v } in [0,1]
+function rgbToHsv(r, g, b) {
+
+    r = bound01(r, 255);
+    g = bound01(g, 255);
+    b = bound01(b, 255);
+
+    var max = mathMax(r, g, b), min = mathMin(r, g, b);
+    var h, s, v = max;
+
+    var d = max - min;
+    s = max === 0 ? 0 : d / max;
+
+    if(max == min) {
+        h = 0; // achromatic
+    }
+    else {
+        switch(max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    return { h: h, s: s, v: v };
+}
+
+// `hsvToRgb`
+// Converts an HSV color value to RGB.
+// *Assumes:* h is contained in [0, 1] or [0, 360] and s and v are contained in [0, 1] or [0, 100]
+// *Returns:* { r, g, b } in the set [0, 255]
+ function hsvToRgb(h, s, v) {
+
+    h = bound01(h, 360) * 6;
+    s = bound01(s, 100);
+    v = bound01(v, 100);
+
+    var i = Math.floor(h),
+        f = h - i,
+        p = v * (1 - s),
+        q = v * (1 - f * s),
+        t = v * (1 - (1 - f) * s),
+        mod = i % 6,
+        r = [v, q, p, p, t, v][mod],
+        g = [t, v, v, q, p, p][mod],
+        b = [p, p, t, v, v, q][mod];
+
+    return { r: r * 255, g: g * 255, b: b * 255 };
+}
+
+// `rgbToHex`
+// Converts an RGB color to hex
+// Assumes r, g, and b are contained in the set [0, 255]
+// Returns a 3 or 6 character hex
+function rgbToHex(r, g, b, allow3Char) {
+
+    var hex = [
+        pad2(mathRound(r).toString(16)),
+        pad2(mathRound(g).toString(16)),
+        pad2(mathRound(b).toString(16))
+    ];
+
+    // Return a 3 character hex if possible
+    if (allow3Char && hex[0].charAt(0) == hex[0].charAt(1) && hex[1].charAt(0) == hex[1].charAt(1) && hex[2].charAt(0) == hex[2].charAt(1)) {
+        return hex[0].charAt(0) + hex[1].charAt(0) + hex[2].charAt(0);
+    }
+
+    return hex.join("");
+}
+
+// `rgbaToHex`
+// Converts an RGBA color plus alpha transparency to hex
+// Assumes r, g, b are contained in the set [0, 255] and
+// a in [0, 1]. Returns a 4 or 8 character rgba hex
+function rgbaToHex(r, g, b, a, allow4Char) {
+
+    var hex = [
+        pad2(mathRound(r).toString(16)),
+        pad2(mathRound(g).toString(16)),
+        pad2(mathRound(b).toString(16)),
+        pad2(convertDecimalToHex(a))
+    ];
+
+    // Return a 4 character hex if possible
+    if (allow4Char && hex[0].charAt(0) == hex[0].charAt(1) && hex[1].charAt(0) == hex[1].charAt(1) && hex[2].charAt(0) == hex[2].charAt(1) && hex[3].charAt(0) == hex[3].charAt(1)) {
+        return hex[0].charAt(0) + hex[1].charAt(0) + hex[2].charAt(0) + hex[3].charAt(0);
+    }
+
+    return hex.join("");
+}
+
+// `rgbaToArgbHex`
+// Converts an RGBA color to an ARGB Hex8 string
+// Rarely used, but required for "toFilter()"
+function rgbaToArgbHex(r, g, b, a) {
+
+    var hex = [
+        pad2(convertDecimalToHex(a)),
+        pad2(mathRound(r).toString(16)),
+        pad2(mathRound(g).toString(16)),
+        pad2(mathRound(b).toString(16))
+    ];
+
+    return hex.join("");
+}
+
+// `equals`
+// Can be called with any tinycolor input
+tinycolor.equals = function (color1, color2) {
+    if (!color1 || !color2) { return false; }
+    return tinycolor(color1).toRgbString() == tinycolor(color2).toRgbString();
+};
+
+tinycolor.random = function() {
+    return tinycolor.fromRatio({
+        r: mathRandom(),
+        g: mathRandom(),
+        b: mathRandom()
+    });
+};
+
+
+// Modification Functions
+// ----------------------
+// Thanks to less.js for some of the basics here
+// <https://github.com/cloudhead/less.js/blob/master/lib/less/functions.js>
+
+function desaturate(color, amount) {
+    amount = (amount === 0) ? 0 : (amount || 10);
+    var hsl = tinycolor(color).toHsl();
+    hsl.s -= amount / 100;
+    hsl.s = clamp01(hsl.s);
+    return tinycolor(hsl);
+}
+
+function saturate(color, amount) {
+    amount = (amount === 0) ? 0 : (amount || 10);
+    var hsl = tinycolor(color).toHsl();
+    hsl.s += amount / 100;
+    hsl.s = clamp01(hsl.s);
+    return tinycolor(hsl);
+}
+
+function greyscale(color) {
+    return tinycolor(color).desaturate(100);
+}
+
+function lighten (color, amount) {
+    amount = (amount === 0) ? 0 : (amount || 10);
+    var hsl = tinycolor(color).toHsl();
+    hsl.l += amount / 100;
+    hsl.l = clamp01(hsl.l);
+    return tinycolor(hsl);
+}
+
+function brighten(color, amount) {
+    amount = (amount === 0) ? 0 : (amount || 10);
+    var rgb = tinycolor(color).toRgb();
+    rgb.r = mathMax(0, mathMin(255, rgb.r - mathRound(255 * - (amount / 100))));
+    rgb.g = mathMax(0, mathMin(255, rgb.g - mathRound(255 * - (amount / 100))));
+    rgb.b = mathMax(0, mathMin(255, rgb.b - mathRound(255 * - (amount / 100))));
+    return tinycolor(rgb);
+}
+
+function darken (color, amount) {
+    amount = (amount === 0) ? 0 : (amount || 10);
+    var hsl = tinycolor(color).toHsl();
+    hsl.l -= amount / 100;
+    hsl.l = clamp01(hsl.l);
+    return tinycolor(hsl);
+}
+
+// Spin takes a positive or negative amount within [-360, 360] indicating the change of hue.
+// Values outside of this range will be wrapped into this range.
+function spin(color, amount) {
+    var hsl = tinycolor(color).toHsl();
+    var hue = (hsl.h + amount) % 360;
+    hsl.h = hue < 0 ? 360 + hue : hue;
+    return tinycolor(hsl);
+}
+
+// Combination Functions
+// ---------------------
+// Thanks to jQuery xColor for some of the ideas behind these
+// <https://github.com/infusion/jQuery-xcolor/blob/master/jquery.xcolor.js>
+
+function complement(color) {
+    var hsl = tinycolor(color).toHsl();
+    hsl.h = (hsl.h + 180) % 360;
+    return tinycolor(hsl);
+}
+
+function triad(color) {
+    var hsl = tinycolor(color).toHsl();
+    var h = hsl.h;
+    return [
+        tinycolor(color),
+        tinycolor({ h: (h + 120) % 360, s: hsl.s, l: hsl.l }),
+        tinycolor({ h: (h + 240) % 360, s: hsl.s, l: hsl.l })
+    ];
+}
+
+function tetrad(color) {
+    var hsl = tinycolor(color).toHsl();
+    var h = hsl.h;
+    return [
+        tinycolor(color),
+        tinycolor({ h: (h + 90) % 360, s: hsl.s, l: hsl.l }),
+        tinycolor({ h: (h + 180) % 360, s: hsl.s, l: hsl.l }),
+        tinycolor({ h: (h + 270) % 360, s: hsl.s, l: hsl.l })
+    ];
+}
+
+function splitcomplement(color) {
+    var hsl = tinycolor(color).toHsl();
+    var h = hsl.h;
+    return [
+        tinycolor(color),
+        tinycolor({ h: (h + 72) % 360, s: hsl.s, l: hsl.l}),
+        tinycolor({ h: (h + 216) % 360, s: hsl.s, l: hsl.l})
+    ];
+}
+
+function analogous(color, results, slices) {
+    results = results || 6;
+    slices = slices || 30;
+
+    var hsl = tinycolor(color).toHsl();
+    var part = 360 / slices;
+    var ret = [tinycolor(color)];
+
+    for (hsl.h = ((hsl.h - (part * results >> 1)) + 720) % 360; --results; ) {
+        hsl.h = (hsl.h + part) % 360;
+        ret.push(tinycolor(hsl));
+    }
+    return ret;
+}
+
+function monochromatic(color, results) {
+    results = results || 6;
+    var hsv = tinycolor(color).toHsv();
+    var h = hsv.h, s = hsv.s, v = hsv.v;
+    var ret = [];
+    var modification = 1 / results;
+
+    while (results--) {
+        ret.push(tinycolor({ h: h, s: s, v: v}));
+        v = (v + modification) % 1;
+    }
+
+    return ret;
+}
+
+// Utility Functions
+// ---------------------
+
+tinycolor.mix = function(color1, color2, amount) {
+    amount = (amount === 0) ? 0 : (amount || 50);
+
+    var rgb1 = tinycolor(color1).toRgb();
+    var rgb2 = tinycolor(color2).toRgb();
+
+    var p = amount / 100;
+
+    var rgba = {
+        r: ((rgb2.r - rgb1.r) * p) + rgb1.r,
+        g: ((rgb2.g - rgb1.g) * p) + rgb1.g,
+        b: ((rgb2.b - rgb1.b) * p) + rgb1.b,
+        a: ((rgb2.a - rgb1.a) * p) + rgb1.a
+    };
+
+    return tinycolor(rgba);
+};
+
+
+// Readability Functions
+// ---------------------
+// <http://www.w3.org/TR/2008/REC-WCAG20-20081211/#contrast-ratiodef (WCAG Version 2)
+
+// `contrast`
+// Analyze the 2 colors and returns the color contrast defined by (WCAG Version 2)
+tinycolor.readability = function(color1, color2) {
+    var c1 = tinycolor(color1);
+    var c2 = tinycolor(color2);
+    return (Math.max(c1.getLuminance(),c2.getLuminance())+0.05) / (Math.min(c1.getLuminance(),c2.getLuminance())+0.05);
+};
+
+// `isReadable`
+// Ensure that foreground and background color combinations meet WCAG2 guidelines.
+// The third argument is an optional Object.
+//      the 'level' property states 'AA' or 'AAA' - if missing or invalid, it defaults to 'AA';
+//      the 'size' property states 'large' or 'small' - if missing or invalid, it defaults to 'small'.
+// If the entire object is absent, isReadable defaults to {level:"AA",size:"small"}.
+
+// *Example*
+//    tinycolor.isReadable("#000", "#111") => false
+//    tinycolor.isReadable("#000", "#111",{level:"AA",size:"large"}) => false
+tinycolor.isReadable = function(color1, color2, wcag2) {
+    var readability = tinycolor.readability(color1, color2);
+    var wcag2Parms, out;
+
+    out = false;
+
+    wcag2Parms = validateWCAG2Parms(wcag2);
+    switch (wcag2Parms.level + wcag2Parms.size) {
+        case "AAsmall":
+        case "AAAlarge":
+            out = readability >= 4.5;
+            break;
+        case "AAlarge":
+            out = readability >= 3;
+            break;
+        case "AAAsmall":
+            out = readability >= 7;
+            break;
+    }
+    return out;
+
+};
+
+// `mostReadable`
+// Given a base color and a list of possible foreground or background
+// colors for that base, returns the most readable color.
+// Optionally returns Black or White if the most readable color is unreadable.
+// *Example*
+//    tinycolor.mostReadable(tinycolor.mostReadable("#123", ["#124", "#125"],{includeFallbackColors:false}).toHexString(); // "#112255"
+//    tinycolor.mostReadable(tinycolor.mostReadable("#123", ["#124", "#125"],{includeFallbackColors:true}).toHexString();  // "#ffffff"
+//    tinycolor.mostReadable("#a8015a", ["#faf3f3"],{includeFallbackColors:true,level:"AAA",size:"large"}).toHexString(); // "#faf3f3"
+//    tinycolor.mostReadable("#a8015a", ["#faf3f3"],{includeFallbackColors:true,level:"AAA",size:"small"}).toHexString(); // "#ffffff"
+tinycolor.mostReadable = function(baseColor, colorList, args) {
+    var bestColor = null;
+    var bestScore = 0;
+    var readability;
+    var includeFallbackColors, level, size ;
+    args = args || {};
+    includeFallbackColors = args.includeFallbackColors ;
+    level = args.level;
+    size = args.size;
+
+    for (var i= 0; i < colorList.length ; i++) {
+        readability = tinycolor.readability(baseColor, colorList[i]);
+        if (readability > bestScore) {
+            bestScore = readability;
+            bestColor = tinycolor(colorList[i]);
+        }
+    }
+
+    if (tinycolor.isReadable(baseColor, bestColor, {"level":level,"size":size}) || !includeFallbackColors) {
+        return bestColor;
+    }
+    else {
+        args.includeFallbackColors=false;
+        return tinycolor.mostReadable(baseColor,["#fff", "#000"],args);
+    }
+};
+
+
+// Big List of Colors
+// ------------------
+// <http://www.w3.org/TR/css3-color/#svg-color>
+var names = tinycolor.names = {
+    aliceblue: "f0f8ff",
+    antiquewhite: "faebd7",
+    aqua: "0ff",
+    aquamarine: "7fffd4",
+    azure: "f0ffff",
+    beige: "f5f5dc",
+    bisque: "ffe4c4",
+    black: "000",
+    blanchedalmond: "ffebcd",
+    blue: "00f",
+    blueviolet: "8a2be2",
+    brown: "a52a2a",
+    burlywood: "deb887",
+    burntsienna: "ea7e5d",
+    cadetblue: "5f9ea0",
+    chartreuse: "7fff00",
+    chocolate: "d2691e",
+    coral: "ff7f50",
+    cornflowerblue: "6495ed",
+    cornsilk: "fff8dc",
+    crimson: "dc143c",
+    cyan: "0ff",
+    darkblue: "00008b",
+    darkcyan: "008b8b",
+    darkgoldenrod: "b8860b",
+    darkgray: "a9a9a9",
+    darkgreen: "006400",
+    darkgrey: "a9a9a9",
+    darkkhaki: "bdb76b",
+    darkmagenta: "8b008b",
+    darkolivegreen: "556b2f",
+    darkorange: "ff8c00",
+    darkorchid: "9932cc",
+    darkred: "8b0000",
+    darksalmon: "e9967a",
+    darkseagreen: "8fbc8f",
+    darkslateblue: "483d8b",
+    darkslategray: "2f4f4f",
+    darkslategrey: "2f4f4f",
+    darkturquoise: "00ced1",
+    darkviolet: "9400d3",
+    deeppink: "ff1493",
+    deepskyblue: "00bfff",
+    dimgray: "696969",
+    dimgrey: "696969",
+    dodgerblue: "1e90ff",
+    firebrick: "b22222",
+    floralwhite: "fffaf0",
+    forestgreen: "228b22",
+    fuchsia: "f0f",
+    gainsboro: "dcdcdc",
+    ghostwhite: "f8f8ff",
+    gold: "ffd700",
+    goldenrod: "daa520",
+    gray: "808080",
+    green: "008000",
+    greenyellow: "adff2f",
+    grey: "808080",
+    honeydew: "f0fff0",
+    hotpink: "ff69b4",
+    indianred: "cd5c5c",
+    indigo: "4b0082",
+    ivory: "fffff0",
+    khaki: "f0e68c",
+    lavender: "e6e6fa",
+    lavenderblush: "fff0f5",
+    lawngreen: "7cfc00",
+    lemonchiffon: "fffacd",
+    lightblue: "add8e6",
+    lightcoral: "f08080",
+    lightcyan: "e0ffff",
+    lightgoldenrodyellow: "fafad2",
+    lightgray: "d3d3d3",
+    lightgreen: "90ee90",
+    lightgrey: "d3d3d3",
+    lightpink: "ffb6c1",
+    lightsalmon: "ffa07a",
+    lightseagreen: "20b2aa",
+    lightskyblue: "87cefa",
+    lightslategray: "789",
+    lightslategrey: "789",
+    lightsteelblue: "b0c4de",
+    lightyellow: "ffffe0",
+    lime: "0f0",
+    limegreen: "32cd32",
+    linen: "faf0e6",
+    magenta: "f0f",
+    maroon: "800000",
+    mediumaquamarine: "66cdaa",
+    mediumblue: "0000cd",
+    mediumorchid: "ba55d3",
+    mediumpurple: "9370db",
+    mediumseagreen: "3cb371",
+    mediumslateblue: "7b68ee",
+    mediumspringgreen: "00fa9a",
+    mediumturquoise: "48d1cc",
+    mediumvioletred: "c71585",
+    midnightblue: "191970",
+    mintcream: "f5fffa",
+    mistyrose: "ffe4e1",
+    moccasin: "ffe4b5",
+    navajowhite: "ffdead",
+    navy: "000080",
+    oldlace: "fdf5e6",
+    olive: "808000",
+    olivedrab: "6b8e23",
+    orange: "ffa500",
+    orangered: "ff4500",
+    orchid: "da70d6",
+    palegoldenrod: "eee8aa",
+    palegreen: "98fb98",
+    paleturquoise: "afeeee",
+    palevioletred: "db7093",
+    papayawhip: "ffefd5",
+    peachpuff: "ffdab9",
+    peru: "cd853f",
+    pink: "ffc0cb",
+    plum: "dda0dd",
+    powderblue: "b0e0e6",
+    purple: "800080",
+    rebeccapurple: "663399",
+    red: "f00",
+    rosybrown: "bc8f8f",
+    royalblue: "4169e1",
+    saddlebrown: "8b4513",
+    salmon: "fa8072",
+    sandybrown: "f4a460",
+    seagreen: "2e8b57",
+    seashell: "fff5ee",
+    sienna: "a0522d",
+    silver: "c0c0c0",
+    skyblue: "87ceeb",
+    slateblue: "6a5acd",
+    slategray: "708090",
+    slategrey: "708090",
+    snow: "fffafa",
+    springgreen: "00ff7f",
+    steelblue: "4682b4",
+    tan: "d2b48c",
+    teal: "008080",
+    thistle: "d8bfd8",
+    tomato: "ff6347",
+    turquoise: "40e0d0",
+    violet: "ee82ee",
+    wheat: "f5deb3",
+    white: "fff",
+    whitesmoke: "f5f5f5",
+    yellow: "ff0",
+    yellowgreen: "9acd32"
+};
+
+// Make it easy to access colors via `hexNames[hex]`
+var hexNames = tinycolor.hexNames = flip(names);
+
+
+// Utilities
+// ---------
+
+// `{ 'name1': 'val1' }` becomes `{ 'val1': 'name1' }`
+function flip(o) {
+    var flipped = { };
+    for (var i in o) {
+        if (o.hasOwnProperty(i)) {
+            flipped[o[i]] = i;
+        }
+    }
+    return flipped;
+}
+
+// Return a valid alpha value [0,1] with all invalid values being set to 1
+function boundAlpha(a) {
+    a = parseFloat(a);
+
+    if (isNaN(a) || a < 0 || a > 1) {
+        a = 1;
+    }
+
+    return a;
+}
+
+// Take input from [0, n] and return it as [0, 1]
+function bound01(n, max) {
+    if (isOnePointZero(n)) { n = "100%"; }
+
+    var processPercent = isPercentage(n);
+    n = mathMin(max, mathMax(0, parseFloat(n)));
+
+    // Automatically convert percentage into number
+    if (processPercent) {
+        n = parseInt(n * max, 10) / 100;
+    }
+
+    // Handle floating point rounding errors
+    if ((Math.abs(n - max) < 0.000001)) {
+        return 1;
+    }
+
+    // Convert into [0, 1] range if it isn't already
+    return (n % max) / parseFloat(max);
+}
+
+// Force a number between 0 and 1
+function clamp01(val) {
+    return mathMin(1, mathMax(0, val));
+}
+
+// Parse a base-16 hex value into a base-10 integer
+function parseIntFromHex(val) {
+    return parseInt(val, 16);
+}
+
+// Need to handle 1.0 as 100%, since once it is a number, there is no difference between it and 1
+// <http://stackoverflow.com/questions/7422072/javascript-how-to-detect-number-as-a-decimal-including-1-0>
+function isOnePointZero(n) {
+    return typeof n == "string" && n.indexOf('.') != -1 && parseFloat(n) === 1;
+}
+
+// Check to see if string passed in is a percentage
+function isPercentage(n) {
+    return typeof n === "string" && n.indexOf('%') != -1;
+}
+
+// Force a hex value to have 2 characters
+function pad2(c) {
+    return c.length == 1 ? '0' + c : '' + c;
+}
+
+// Replace a decimal with it's percentage value
+function convertToPercentage(n) {
+    if (n <= 1) {
+        n = (n * 100) + "%";
+    }
+
+    return n;
+}
+
+// Converts a decimal to a hex value
+function convertDecimalToHex(d) {
+    return Math.round(parseFloat(d) * 255).toString(16);
+}
+// Converts a hex value to a decimal
+function convertHexToDecimal(h) {
+    return (parseIntFromHex(h) / 255);
+}
+
+var matchers = (function() {
+
+    // <http://www.w3.org/TR/css3-values/#integers>
+    var CSS_INTEGER = "[-\\+]?\\d+%?";
+
+    // <http://www.w3.org/TR/css3-values/#number-value>
+    var CSS_NUMBER = "[-\\+]?\\d*\\.\\d+%?";
+
+    // Allow positive/negative integer/number.  Don't capture the either/or, just the entire outcome.
+    var CSS_UNIT = "(?:" + CSS_NUMBER + ")|(?:" + CSS_INTEGER + ")";
+
+    // Actual matching.
+    // Parentheses and commas are optional, but not required.
+    // Whitespace can take the place of commas or opening paren
+    var PERMISSIVE_MATCH3 = "[\\s|\\(]+(" + CSS_UNIT + ")[,|\\s]+(" + CSS_UNIT + ")[,|\\s]+(" + CSS_UNIT + ")\\s*\\)?";
+    var PERMISSIVE_MATCH4 = "[\\s|\\(]+(" + CSS_UNIT + ")[,|\\s]+(" + CSS_UNIT + ")[,|\\s]+(" + CSS_UNIT + ")[,|\\s]+(" + CSS_UNIT + ")\\s*\\)?";
+
+    return {
+        CSS_UNIT: new RegExp(CSS_UNIT),
+        rgb: new RegExp("rgb" + PERMISSIVE_MATCH3),
+        rgba: new RegExp("rgba" + PERMISSIVE_MATCH4),
+        hsl: new RegExp("hsl" + PERMISSIVE_MATCH3),
+        hsla: new RegExp("hsla" + PERMISSIVE_MATCH4),
+        hsv: new RegExp("hsv" + PERMISSIVE_MATCH3),
+        hsva: new RegExp("hsva" + PERMISSIVE_MATCH4),
+        hex3: /^#?([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})$/,
+        hex6: /^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/,
+        hex4: /^#?([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})([0-9a-fA-F]{1})$/,
+        hex8: /^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/
+    };
+})();
+
+// `isValidCSSUnit`
+// Take in a single string / number and check to see if it looks like a CSS unit
+// (see `matchers` above for definition).
+function isValidCSSUnit(color) {
+    return !!matchers.CSS_UNIT.exec(color);
+}
+
+// `stringInputToObject`
+// Permissive string parsing.  Take in a number of formats, and output an object
+// based on detected format.  Returns `{ r, g, b }` or `{ h, s, l }` or `{ h, s, v}`
+function stringInputToObject(color) {
+
+    color = color.replace(trimLeft,'').replace(trimRight, '').toLowerCase();
+    var named = false;
+    if (names[color]) {
+        color = names[color];
+        named = true;
+    }
+    else if (color == 'transparent') {
+        return { r: 0, g: 0, b: 0, a: 0, format: "name" };
+    }
+
+    // Try to match string input using regular expressions.
+    // Keep most of the number bounding out of this function - don't worry about [0,1] or [0,100] or [0,360]
+    // Just return an object and let the conversion functions handle that.
+    // This way the result will be the same whether the tinycolor is initialized with string or object.
+    var match;
+    if ((match = matchers.rgb.exec(color))) {
+        return { r: match[1], g: match[2], b: match[3] };
+    }
+    if ((match = matchers.rgba.exec(color))) {
+        return { r: match[1], g: match[2], b: match[3], a: match[4] };
+    }
+    if ((match = matchers.hsl.exec(color))) {
+        return { h: match[1], s: match[2], l: match[3] };
+    }
+    if ((match = matchers.hsla.exec(color))) {
+        return { h: match[1], s: match[2], l: match[3], a: match[4] };
+    }
+    if ((match = matchers.hsv.exec(color))) {
+        return { h: match[1], s: match[2], v: match[3] };
+    }
+    if ((match = matchers.hsva.exec(color))) {
+        return { h: match[1], s: match[2], v: match[3], a: match[4] };
+    }
+    if ((match = matchers.hex8.exec(color))) {
+        return {
+            r: parseIntFromHex(match[1]),
+            g: parseIntFromHex(match[2]),
+            b: parseIntFromHex(match[3]),
+            a: convertHexToDecimal(match[4]),
+            format: named ? "name" : "hex8"
+        };
+    }
+    if ((match = matchers.hex6.exec(color))) {
+        return {
+            r: parseIntFromHex(match[1]),
+            g: parseIntFromHex(match[2]),
+            b: parseIntFromHex(match[3]),
+            format: named ? "name" : "hex"
+        };
+    }
+    if ((match = matchers.hex4.exec(color))) {
+        return {
+            r: parseIntFromHex(match[1] + '' + match[1]),
+            g: parseIntFromHex(match[2] + '' + match[2]),
+            b: parseIntFromHex(match[3] + '' + match[3]),
+            a: convertHexToDecimal(match[4] + '' + match[4]),
+            format: named ? "name" : "hex8"
+        };
+    }
+    if ((match = matchers.hex3.exec(color))) {
+        return {
+            r: parseIntFromHex(match[1] + '' + match[1]),
+            g: parseIntFromHex(match[2] + '' + match[2]),
+            b: parseIntFromHex(match[3] + '' + match[3]),
+            format: named ? "name" : "hex"
+        };
+    }
+
+    return false;
+}
+
+function validateWCAG2Parms(parms) {
+    // return valid WCAG2 parms for isReadable.
+    // If input parms are invalid, return {"level":"AA", "size":"small"}
+    var level, size;
+    parms = parms || {"level":"AA", "size":"small"};
+    level = (parms.level || "AA").toUpperCase();
+    size = (parms.size || "small").toLowerCase();
+    if (level !== "AA" && level !== "AAA") {
+        level = "AA";
+    }
+    if (size !== "small" && size !== "large") {
+        size = "small";
+    }
+    return {"level":level, "size":size};
+}
+
+// Node: Export function
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = tinycolor;
+}
+// AMD/requirejs: Define the module
+else if (typeof define === 'function' && define.amd) {
+    define(function () {return tinycolor;});
+}
+// Browser: Expose to window
+else {
+    window.tinycolor = tinycolor;
+}
+
+})(Math);
+
+},{}]},{},[1]);
