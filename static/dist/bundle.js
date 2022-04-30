@@ -1,44 +1,65 @@
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
-var ReconnectingWebSocket = require('reconnecting-websocket');
-var sharedb = require('sharedb/lib/client');
-var richText = require('rich-text');
-var Quill = require('quill');
-var QuillCursors = require('quill-cursors');
-var tinycolor = require('tinycolor2');
-var ObjectID = require('bson-objectid');
+const ReconnectingWebSocket = require('reconnecting-websocket')
+const sharedb = require('sharedb/lib/client')
+const richText = require('rich-text')
+const Quill = require('quill')
+const QuillCursors = require('quill-cursors')
+const tinycolor = require('tinycolor2')
+const ObjectID = require('bson-objectid')
 
-sharedb.types.register(richText.type);
-Quill.register('modules/cursors', QuillCursors);
+sharedb.types.register(richText.type)
+Quill.register('modules/cursors', QuillCursors)
 
-var connectionButton = document.getElementById('client-connection');
-connectionButton.addEventListener('click', function () {
-    toggleConnection(connectionButton);
-});
+let colors = {}
 
-var nameInput = document.getElementById('name');
+const collection = 'text-editor'
+const id = ROOM_ID
+const presenceId = new ObjectID().toString()
 
-var colors = {};
+const socket = new ReconnectingWebSocket('ws://' + window.location.host);
+const connection = new sharedb.Connection(socket)
 
-var collection = 'text-editor';
-var id = ROOM_ID;
-var presenceId = new ObjectID().toString();
-
-var socket = new ReconnectingWebSocket('ws://' + window.location.host);
-var connection = new sharedb.Connection(socket);
-
-var doc = connection.get(collection, id);
+const doc = connection.get(collection, id);
 
 doc.subscribe(function (err) {
     if (err) throw err;
     initialiseQuill(doc);
 });
 
+
+const Font = Quill.import("formats/font")
+const Size = Quill.import('attributors/style/size');
+
+// register fonts
+Font.whitelist = [
+    "arial",
+    "roboto",
+    "montserrat",
+    "helvetica",
+    "poppins",
+    "merriweather",
+    "playfair"
+]
+Quill.register(Font, true)
+
+// register font sizes
+fontSizes = ['14px', '16px', '18px', '22px', '28px', '36px']
+Size.whitelist = fontSizes;
+Quill.register(Size, true);
+
 function initialiseQuill(doc) {
-    var quill = new Quill('#editor', {
-        theme: 'bubble',
-        modules: { cursors: true }
+    const quill = new Quill('#editor', {
+        theme: 'snow',
+        modules: {
+            toolbar: '#toolbar',
+            cursors: true
+        },
     });
-    var cursors = quill.getModule('cursors');
+
+    // change the link placeholder to www.github.com
+    const tooltip = quill.theme.tooltip;
+    const input = tooltip.root.querySelector("input[data-link]");
+    input.dataset.link = 'www.github.com';
 
     quill.setContents(doc.data);
 
@@ -52,26 +73,24 @@ function initialiseQuill(doc) {
         quill.updateContents(op);
     });
 
-    var presence = doc.connection.getDocPresence(collection, id);
+    // initializing multi cursors
+    const cursors = quill.getModule('cursors');
+
+    const presence = doc.connection.getDocPresence(collection, id);
 
     presence.subscribe(function (error) {
         if (error) throw error;
     });
 
-    var localPresence = presence.create(presenceId);
+    const localPresence = presence.create(presenceId);
 
     quill.on('selection-change', function (range, oldRange, source) {
-        // We only need to send updates if the user moves the cursor
-        // themselves. Cursor updates as a result of text changes will
-        // automatically be handled by the remote client.
+
         if (source !== 'user') return;
-        // Ignore blurring, so that we can see lots of users in the
-        // same window. In real use, you may want to clear the cursor.
+
         if (!range) return;
-        // In this particular instance, we can send extra information
-        // on the presence object. This ability will vary depending on
-        // type.
-        range.name = nameInput.value;
+
+        // range.name = nameInput.value;
         localPresence.submit(range, function (error) {
             if (error) throw error;
         });
@@ -85,27 +104,6 @@ function initialiseQuill(doc) {
     });
 
     return quill;
-}
-
-function toggleConnection(button) {
-    if (button.classList.contains('connected')) {
-        button.classList.remove('connected');
-        button.textContent = 'Connect';
-        disconnect();
-    } else {
-        button.classList.add('connected');
-        button.textContent = 'Disconnect';
-        connect();
-    }
-}
-
-function disconnect() {
-    doc.connection.close();
-}
-
-function connect() {
-    var socket = new ReconnectingWebSocket('ws://' + window.location.host);
-    doc.connection.bindToSocket(socket);
 }
 
 },{"bson-objectid":3,"quill":17,"quill-cursors":16,"reconnecting-websocket":18,"rich-text":19,"sharedb/lib/client":28,"tinycolor2":49}],2:[function(require,module,exports){

@@ -1,44 +1,64 @@
-var ReconnectingWebSocket = require('reconnecting-websocket');
-var sharedb = require('sharedb/lib/client');
-var richText = require('rich-text');
-var Quill = require('quill');
-var QuillCursors = require('quill-cursors');
-var tinycolor = require('tinycolor2');
-var ObjectID = require('bson-objectid');
+const ReconnectingWebSocket = require('reconnecting-websocket')
+const sharedb = require('sharedb/lib/client')
+const richText = require('rich-text')
+const Quill = require('quill')
+const QuillCursors = require('quill-cursors')
+const tinycolor = require('tinycolor2')
+const ObjectID = require('bson-objectid')
 
-sharedb.types.register(richText.type);
-Quill.register('modules/cursors', QuillCursors);
+sharedb.types.register(richText.type)
+Quill.register('modules/cursors', QuillCursors)
 
-var connectionButton = document.getElementById('client-connection');
-connectionButton.addEventListener('click', function () {
-    toggleConnection(connectionButton);
-});
+let colors = {}
 
-var nameInput = document.getElementById('name');
+const collection = 'text-editor'
+const id = ROOM_ID
+const presenceId = new ObjectID().toString()
 
-var colors = {};
+const socket = new ReconnectingWebSocket('ws://' + window.location.host);
+const connection = new sharedb.Connection(socket)
 
-var collection = 'text-editor';
-var id = ROOM_ID;
-var presenceId = new ObjectID().toString();
-
-var socket = new ReconnectingWebSocket('ws://' + window.location.host);
-var connection = new sharedb.Connection(socket);
-
-var doc = connection.get(collection, id);
+const doc = connection.get(collection, id);
 
 doc.subscribe(function (err) {
     if (err) throw err;
     initialiseQuill(doc);
 });
 
+
+const Font = Quill.import("formats/font")
+const Size = Quill.import('attributors/style/size');
+
+// register fonts
+Font.whitelist = [
+    "arial",
+    "roboto",
+    "montserrat",
+    "helvetica",
+    "poppins",
+    "merriweather",
+    "playfair"
+]
+Quill.register(Font, true)
+
+// register font sizes
+fontSizes = ['14px', '16px', '18px', '22px', '28px', '36px']
+Size.whitelist = fontSizes;
+Quill.register(Size, true);
+
 function initialiseQuill(doc) {
-    var quill = new Quill('#editor', {
+    const quill = new Quill('#editor', {
         theme: 'snow',
-        modules: { cursors: true }
+        modules: {
+            toolbar: '#toolbar',
+            cursors: true
+        },
     });
 
-    var cursors = quill.getModule('cursors');
+    // change the link placeholder to www.github.com
+    const tooltip = quill.theme.tooltip;
+    const input = tooltip.root.querySelector("input[data-link]");
+    input.dataset.link = 'www.github.com';
 
     quill.setContents(doc.data);
 
@@ -52,13 +72,16 @@ function initialiseQuill(doc) {
         quill.updateContents(op);
     });
 
-    var presence = doc.connection.getDocPresence(collection, id);
+    // initializing multi cursors
+    const cursors = quill.getModule('cursors');
+
+    const presence = doc.connection.getDocPresence(collection, id);
 
     presence.subscribe(function (error) {
         if (error) throw error;
     });
 
-    var localPresence = presence.create(presenceId);
+    const localPresence = presence.create(presenceId);
 
     quill.on('selection-change', function (range, oldRange, source) {
 
@@ -66,7 +89,7 @@ function initialiseQuill(doc) {
 
         if (!range) return;
 
-        range.name = nameInput.value;
+        // range.name = nameInput.value;
         localPresence.submit(range, function (error) {
             if (error) throw error;
         });
@@ -80,25 +103,4 @@ function initialiseQuill(doc) {
     });
 
     return quill;
-}
-
-function toggleConnection(button) {
-    if (button.classList.contains('connected')) {
-        button.classList.remove('connected');
-        button.textContent = 'Connect';
-        disconnect();
-    } else {
-        button.classList.add('connected');
-        button.textContent = 'Disconnect';
-        connect();
-    }
-}
-
-function disconnect() {
-    doc.connection.close();
-}
-
-function connect() {
-    var socket = new ReconnectingWebSocket('ws://' + window.location.host);
-    doc.connection.bindToSocket(socket);
 }

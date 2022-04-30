@@ -37,7 +37,7 @@ app.get('/:roomId', (req, res) => {
 
         // if document does not exist, create it
         if (doc.type === null) {
-            doc.create([{ insert: 'Hi' }], 'rich-text')
+            doc.create([{ insert: '' }], 'rich-text')
         }
     })
 
