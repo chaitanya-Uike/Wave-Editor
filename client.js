@@ -1,4 +1,5 @@
 const ReconnectingWebSocket = require('reconnecting-websocket')
+const { io } = require("socket.io-client")
 const sharedb = require('sharedb/lib/client')
 const richText = require('rich-text')
 const Quill = require('quill')
@@ -15,7 +16,7 @@ const collection = 'text-editor'
 const id = ROOM_ID
 const presenceId = new ObjectID().toString()
 
-const socket = new ReconnectingWebSocket('ws://' + window.location.host);
+const socket = new ReconnectingWebSocket('ws://' + window.location.host + '/ws');
 const connection = new sharedb.Connection(socket)
 
 const doc = connection.get(collection, id);
@@ -23,8 +24,7 @@ const doc = connection.get(collection, id);
 doc.subscribe(function (err) {
     if (err) throw err;
     initialiseQuill(doc);
-});
-
+})
 
 const Font = Quill.import("formats/font")
 const Size = Quill.import('attributors/style/size');
@@ -58,7 +58,7 @@ function initialiseQuill(doc) {
     // change the link placeholder to www.github.com
     const tooltip = quill.theme.tooltip;
     const input = tooltip.root.querySelector("input[data-link]");
-    input.dataset.link = 'www.github.com';
+    input.dataset.link = 'www.wave-editor.com';
 
     quill.setContents(doc.data);
 
@@ -100,7 +100,18 @@ function initialiseQuill(doc) {
         var name = (range && range.name) || 'Anonymous';
         cursors.createCursor(id, name, colors[id]);
         cursors.moveCursor(id, range);
-    });
+    })
 
-    return quill;
+    const socketio = io('/')
+
+    socketio.emit('join-room', ROOM_ID, presenceId)
+
+    socketio.on('user-joined', userId => {
+        console.log('user joined', userId)
+    })
+
+    socketio.on('user-disconnected', userId => {
+        console.log('user disconnected', userId)
+        cursors.removeCursor(userId)
+    })
 }
