@@ -18,10 +18,7 @@
 
 /* toolbar styling */
 #toolbar-wrapper {
-    position: sticky;
-    top: 0;
     padding-top: 1rem;
-    z-index: 10;
     background-color: #1D1E24;
 }
 
@@ -144,11 +141,14 @@
 
 
 /* editor styling */
-#editor .ql-editor {
-    min-height: 29.7cm;
-    width: 100%;
-    margin: 2rem;
 
+#editor {
+    height: calc(100% - 70px);
+}
+
+#editor .ql-editor {
+    width: 100%;
+    padding: 40px;
     background-color: #1D1E24;
     font-size: 22px;
     font-family: Arial;
@@ -159,6 +159,8 @@
     border: none;
     display: flex;
     justify-content: center;
+    overflow: none;
+    height: fit-content;
 }
 
 .ql-container.ql-snow {
@@ -365,17 +367,17 @@
 
 /* scroll bar styling */
 /* width */
-.editor-wrapper::-webkit-scrollbar {
+.ql-editor::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
 /* Track */
-.editor-wrapper::-webkit-scrollbar-track {
+.ql-editor::-webkit-scrollbar-track {
     background: #1D1E24;
 }
 
 /* Handle */
-.editor-wrapper::-webkit-scrollbar-thumb {
+.ql-editor::-webkit-scrollbar-thumb {
     background: white;
 }
