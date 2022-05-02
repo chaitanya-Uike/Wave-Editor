@@ -12,7 +12,6 @@
 .editor-wrapper {
     width: 100vw;
     height: 100vh;
-    overflow: auto;
     background-color: #1D1E24;
 }
 
